@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@opencode-peer-session-relay/a2a-protocol": ["packages/a2a-protocol/src/index.ts"],
+      "@opencode-peer-session-relay/relay-plugin": ["packages/relay-plugin/src/index.ts"],
+      "@opencode-peer-session-relay/relay-shared": ["packages/relay-shared/src/index.ts"]
+    }
+  }
+}

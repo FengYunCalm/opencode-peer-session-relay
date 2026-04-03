@@ -1,0 +1,19 @@
+{
+  "name": "@opencode-peer-session-relay/relay-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opencode-peer-session-relay/a2a-protocol": "workspace:*",
+    "@opencode-peer-session-relay/relay-shared": "workspace:*",
+    "@opencode-ai/plugin": "^1.3.13",
+    "@opencode-ai/sdk": "^1.3.13",
+    "better-sqlite3": "^11.10.0",
+    "zod": "^3.24.4"
+  }
+}

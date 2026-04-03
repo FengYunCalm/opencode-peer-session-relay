@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/relay-shared" },
+    { "path": "./packages/a2a-protocol" },
+    { "path": "./packages/relay-plugin" }
+  ]
+}
