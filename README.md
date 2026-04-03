@@ -31,40 +31,14 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 - duplicate suppression, human takeover guard, replay path, and audit trail
 - public response/event sanitization for task metadata
 
-## Verification
-
-Current local verification target:
+## Get the code
 
 ```bash
-corepack pnpm test
-corepack pnpm exec tsc -b --pretty false
+git clone https://github.com/FengYunCalm/opencode-peer-session-relay.git
+cd opencode-peer-session-relay
 ```
 
-At the time of writing, the repository passes the full local test suite and TypeScript project build.
-
-## Development
-
-Install dependencies:
-
-```bash
-corepack pnpm install
-```
-
-Run tests:
-
-```bash
-corepack pnpm test
-```
-
-Run typecheck:
-
-```bash
-corepack pnpm exec tsc -b --pretty false
-```
-
-## Repository status
-
-This repository has been split into its own standalone git repository so it can be published independently from the larger parent workspace it originally lived in.
+This README is intentionally source-oriented. It does not claim any npm package, hosted deployment, or public release channel.
 
 ## License
 

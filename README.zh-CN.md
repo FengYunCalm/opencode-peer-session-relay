@@ -31,40 +31,14 @@
 - 去重、人类接管保护、重放路径与审计轨迹
 - 面向公开响应 / 事件的任务元数据脱敏
 
-## 验证
-
-当前本地验证命令：
+## 获取源码
 
 ```bash
-corepack pnpm test
-corepack pnpm exec tsc -b --pretty false
+git clone https://github.com/FengYunCalm/opencode-peer-session-relay.git
+cd opencode-peer-session-relay
 ```
 
-在编写本 README 时，仓库可以通过完整本地测试集与 TypeScript 项目构建。
-
-## 开发
-
-安装依赖：
-
-```bash
-corepack pnpm install
-```
-
-运行测试：
-
-```bash
-corepack pnpm test
-```
-
-运行 typecheck：
-
-```bash
-corepack pnpm exec tsc -b --pretty false
-```
-
-## 仓库状态
-
-这个仓库已经从原来的大工作区中拆分为独立仓库，便于单独发布和维护。
+这个 README 只按源码仓库来写，不声明 npm 包、托管部署或其他公开发布渠道。
 
 ## 许可证
 
