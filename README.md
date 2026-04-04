@@ -39,10 +39,16 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 - Global install target used during local testing: `~/.config/opencode/plugins/opencode-a2a-relay.js`
 - For OpenCode 1.3.6 local-path plugin compatibility, the installed bundle uses `default export { id, server }`
 
-Typical room-code flow:
+### Private room flow (unchanged)
 1. Conversation A creates a room
 2. Conversation B joins with the room code
 3. Either side sends a relayed message to the paired peer
+
+### Group room flow
+1. Conversation A creates a **group** room and becomes the owner
+2. Other conversations join with a room code **and alias**
+3. The owner can broadcast to the room or privately message a specific alias
+4. Agents can inspect threads, read durable messages, mark read cursors, and export transcripts
 
 ## Get the code
 

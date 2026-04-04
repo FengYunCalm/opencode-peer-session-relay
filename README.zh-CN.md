@@ -39,10 +39,16 @@
 - 本地测试时使用的全局安装目标：`~/.config/opencode/plugins/opencode-a2a-relay.js`
 - 为兼容 OpenCode 1.3.6，本地路径插件采用 `default export { id, server }` 形状
 
-典型房间码流程：
-1. 会话 A 创建房间
+### 私聊房间流程（保持不变）
+1. 会话 A 创建一个房间
 2. 会话 B 用房间码加入
 3. 任一侧把消息转发给配对会话
+
+### 群聊房间流程
+1. 会话 A 创建一个**群聊房间**并自动成为 owner / 群主
+2. 其他会话使用房间码 **并携带 alias** 加入
+3. 群主可以广播给整个房间，也可以按 alias 私聊某个成员
+4. agents 可以查看线程、读取 durable 消息、推进已读游标，并导出 transcript
 
 ## 获取源码
 

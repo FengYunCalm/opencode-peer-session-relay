@@ -17,7 +17,7 @@ Use this skill when the user wants OpenCode conversations to coordinate through 
 Do not ask the user to manually edit session IDs or configuration files for routine room usage.
 The current conversation session is identified automatically by the plugin tools.
 
-## Execution contract
+## Tool-first contract
 
 When the user's intent clearly matches one of the operations below, your **first action must be the matching tool call**.
 
@@ -27,10 +27,14 @@ Do **not** before the first tool call:
 - restate the request
 - ask for confirmation
 - switch into analysis mode
+- attempt MCP server calls using the name `relay-room`
+
+The name `relay-room` is a **skill name**, not an MCP server name.
+If the requested capability exists, it must be executed through the exposed relay plugin tools.
 
 Only stop immediate execution if:
 - a required argument is missing
-- the current session does not expose the needed relay tools
+- the current session truly does not expose the needed relay tools
 - the tool call itself fails
 
 ## Reply contract
@@ -38,18 +42,20 @@ Only stop immediate execution if:
 Your user-facing reply must come **after** the real tool call and must reflect the actual tool output.
 Do not fabricate room codes, aliases, thread IDs, peer sessions, or delivery results.
 
-## Private room flow (old flow unchanged)
+If tools are unavailable, report the missing tool names directly.
+Do not say `MCP server "relay-room" not found`.
+
+## Private room flow (unchanged)
 
 ### Create a private room
 If the user says things like:
-- 创建一个房间
-- 创建私聊房间
-- 开个房间
-- create room
+- create a room
+- create a private room
+- start a room
 
 Your first action must be:
 - call `relay_room_create`
-- omit `kind` or use `kind="private"`
+- omit `kind` or set `kind="private"`
 
 ### Join a private room
 If the user wants to join a private room:
@@ -66,9 +72,8 @@ If the user wants to send to the other side in a private room:
 
 ### Create a group room
 If the user says things like:
-- 创建一个群聊房间
-- 创建群房间
-- create group room
+- create a group room
+- start a group room
 
 Your first action must be:
 - call `relay_room_create` with `kind="group"`
@@ -80,8 +85,8 @@ After the tool call:
 
 ### Join a group room with alias
 If the user says things like:
-- 加入 123456 房间，扮演 alpha
-- 加入房间 123456，代号 beta
+- join room 123456 as alpha
+- join 123456 and use alias beta
 
 Your first action must be:
 - call `relay_room_join`
@@ -95,7 +100,7 @@ If the user asks who is in the room:
 - call `relay_room_members`
 
 ### Change a member role
-If the user wants to make someone observer/member:
+If the user wants to make someone an observer or member:
 - call `relay_room_set_role`
 - only the room owner can do this
 
@@ -115,7 +120,7 @@ If the user wants to privately message one member inside a group room:
 
 ## Thread/message warehouse tools
 
-Use these when the user explicitly wants durable message/thread operations rather than simple room send:
+Use these when the user explicitly wants durable message/thread operations instead of simple room-send shortcuts:
 
 - `relay_thread_create`
 - `relay_thread_list`
@@ -124,55 +129,41 @@ Use these when the user explicitly wants durable message/thread operations rathe
 - `relay_message_mark_read`
 - `relay_transcript_export`
 
-### Create a durable thread
-- direct/private thread: `relay_thread_create`
-- group thread: `relay_thread_create`
-
-### Inspect threads
-- call `relay_thread_list`
-
-### Read thread messages
-- call `relay_message_list`
-
-### Send into a thread directly
-- call `relay_message_send`
-
-### Mark thread read cursor
-- call `relay_message_mark_read`
-
-### Export full transcript
-- call `relay_transcript_export`
-
 ## Fast-path examples
 
 ### Example: private room creation
-User: 创建一个房间
-Your first action: call `relay_room_create`
+User: create a room
+First action: call `relay_room_create`
 
 ### Example: group room creation
-User: 创建一个群聊房间
-Your first action: call `relay_room_create` with `kind="group"`
+User: create a group room
+First action: call `relay_room_create` with `kind="group"`
 
 ### Example: join group with alias
-User: 加入 821053 房间，扮演 alpha
-Your first action: call `relay_room_join` with `roomCode="821053"`, `alias="alpha"`
+User: join room 821053 as alpha
+First action: call `relay_room_join` with `roomCode="821053"`, `alias="alpha"`
 
 ### Example: group broadcast
-User: 给房间所有人发：今天先做 API
-Your first action: call `relay_room_send` with `message="今天先做 API"`
+User: send this to everyone in the room: start API work today
+First action: call `relay_room_send` with `message="start API work today"`
 
 ### Example: direct message in group
-User: 私聊 alpha：你负责接口联调
-Your first action: call `relay_room_send` with `message="你负责接口联调"`, `targetAlias="alpha"`
+User: DM alpha: you own integration testing
+First action: call `relay_room_send` with `message="you own integration testing"`, `targetAlias="alpha"`
 
 ### Example: export transcript
-User: 导出 thread_xxx 的完整 transcript
-Your first action: call `relay_transcript_export` with `threadId="thread_xxx"`
+User: export the full transcript for thread_xxx
+First action: call `relay_transcript_export` with `threadId="thread_xxx"`
 
 ## Failure fallback
 
-If this session does not expose the required relay tools, say that plainly and stop.
+If the session does not expose the required relay tools, say that plainly and stop.
 Do not pretend the room or thread operation succeeded.
+Do not invent a room code.
+Do not switch to a fake MCP server path.
+
+Use a direct fallback like:
+- This session does not expose `relay_room_create`, `relay_room_join`, `relay_room_status`, or the related relay tools, so I cannot execute the room action here.
 
 ## Guardrails
 
@@ -180,7 +171,7 @@ Do not pretend the room or thread operation succeeded.
 - group room join must require alias
 - creator of a group room is the room owner
 - room send in group mode may broadcast or direct-message a specific alias
-- use durable thread/message tools when the user is explicitly operating on warehouse history
+- use durable thread/message tools when the user explicitly wants warehouse/history operations
 - if a required argument is missing, ask only for that missing argument
 - if a tool call fails, report the failure plainly and stop guessing
 - treat this as an execution skill, not an analysis skill
