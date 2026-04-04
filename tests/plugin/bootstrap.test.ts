@@ -51,7 +51,7 @@ describe("relay plugin bootstrap", () => {
     expect(state?.sessionRegistry.get("session-1")?.status?.type).toBe("idle");
   });
 
-  it("injector uses noReply context injection", async () => {
+  it("injector separates silent injection from turn-starting submission", async () => {
     const prompt = vi.fn().mockResolvedValue({ data: true });
     const promptAsync = vi.fn().mockResolvedValue({ data: true });
     const injector = new SessionInjector({
@@ -63,6 +63,7 @@ describe("relay plugin bootstrap", () => {
 
     await injector.injectAnchor("session-1", "relay anchor");
     await injector.injectAsync("session-1", "relay anchor async");
+    await injector.submitAsync("session-1", "relay submit async");
 
     expect(prompt).toHaveBeenCalledWith({
       path: { id: "session-1" },
@@ -72,12 +73,19 @@ describe("relay plugin bootstrap", () => {
         parts: [{ type: "text", text: "relay anchor" }]
       }
     });
-    expect(promptAsync).toHaveBeenCalledWith({
+    expect(promptAsync).toHaveBeenNthCalledWith(1, {
       path: { id: "session-1" },
       body: {
         noReply: true,
         system: undefined,
         parts: [{ type: "text", text: "relay anchor async" }]
+      }
+    });
+    expect(promptAsync).toHaveBeenNthCalledWith(2, {
+      path: { id: "session-1" },
+      body: {
+        system: undefined,
+        parts: [{ type: "text", text: "relay submit async" }]
       }
     });
   });

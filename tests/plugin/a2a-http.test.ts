@@ -101,9 +101,33 @@ describe("A2A HTTP integration", () => {
     const taskId = sendBody.result.task.taskId as string;
 
     expect(sendResponse.status).toBe(200);
-    expect(sendBody.result.task.status).toBe("working");
+    expect(sendBody.result.task.status).toBe("submitted");
     expect(sendBody.result.task.metadata).toEqual({});
     expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledWith({
+      path: { id: "session-1" },
+      body: {
+        system: undefined,
+        parts: [
+          {
+            type: "text",
+            text: expect.stringContaining("hello over http")
+          }
+        ]
+      }
+    });
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "session-1",
+          status: { type: "busy" }
+        }
+      } as never
+    });
+
+    expect(state!.runtime.taskStore.getTask(taskId)?.status).toBe("working");
 
     const getResponse = await fetch(state!.host.url!, {
       method: "POST",

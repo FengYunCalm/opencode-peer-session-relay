@@ -74,7 +74,31 @@ describe("relay runtime replay", () => {
 
     const replayed = await state.runtime.replayTask(createdTask.taskId);
 
-    expect(replayed?.status).toBe("working");
+    expect(replayed?.status).toBe("submitted");
     expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledWith({
+      path: { id: "session-replay-1" },
+      body: {
+        system: undefined,
+        parts: [
+          {
+            type: "text",
+            text: expect.stringContaining("redo this")
+          }
+        ]
+      }
+    });
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "session-replay-1",
+          status: { type: "busy" }
+        }
+      } as never
+    });
+
+    expect(state.runtime.taskStore.getTask(createdTask.taskId)?.status).toBe("working");
   });
 });
