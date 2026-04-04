@@ -10,20 +10,25 @@ afterEach(() => {
 });
 
 describe("room store", () => {
-  it("creates and joins a room, then recognizes the paired sessions", () => {
+  it("creates a room, tracks members, and preserves pair compatibility", () => {
     const location = createTestDatabaseLocation("room-store");
     dbLocations.push(location);
     const roomStore = new RoomStore(location);
 
-    const room = roomStore.createRoom("session-a");
+    const room = roomStore.createRoom("session-owner");
     expect(room.roomCode).toMatch(/^\d{6}$/);
     expect(room.status).toBe("open");
 
-    const joined = roomStore.joinRoom(room.roomCode, "session-b");
+    const joined = roomStore.joinRoom(room.roomCode, "session-a");
     expect(joined.status).toBe("active");
-    expect(joined.joinedSessionID).toBe("session-b");
-    expect(roomStore.getPeerSessionID("session-a")).toBe("session-b");
-    expect(roomStore.areSessionsPaired("session-a", "session-b")).toBe(true);
-    expect(roomStore.areSessionsPaired("session-a", "session-c")).toBe(false);
+    expect(roomStore.getPeerSessionID("session-owner")).toBe("session-a");
+    expect(roomStore.areSessionsPaired("session-owner", "session-a")).toBe(true);
+
+    roomStore.joinRoom(room.roomCode, "session-b");
+    const members = roomStore.listMembers(room.roomCode);
+    expect(members).toHaveLength(3);
+    expect(roomStore.getMemberSessionIDs(room.roomCode)).toEqual(["session-owner", "session-a", "session-b"]);
+    expect(roomStore.areSessionsPaired("session-owner", "session-b")).toBe(true);
+    expect(roomStore.getPeerSessionID("session-owner")).toBeUndefined();
   });
 });
