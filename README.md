@@ -24,6 +24,7 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 
 - Agent Card exposure
 - `sendMessage`, `getTask`, `cancelTask`, `sendMessageStream`
+- room-code pairing flow: `relay_room_create`, `relay_room_join`, `relay_room_status`, `relay_room_send`
 - SSE task event streaming
 - idle-gated dispatch into OpenCode sessions
 - duplicate suppression, human takeover guard, replay path, and audit trail
@@ -39,6 +40,17 @@ corepack pnpm exec tsc -b --pretty false
 ```
 
 At the time of writing, the repository passes the full local test suite and TypeScript project build.
+
+## OpenCode skill and local plugin workflow
+
+- Project-local skill: `.opencode/skills/relay-room/SKILL.md`
+- Global install target used during local testing: `~/.config/opencode/plugins/opencode-a2a-relay.js`
+- For OpenCode 1.3.6 local-path plugin compatibility, the installed bundle uses `default export { id, server }`
+
+Typical room-code flow:
+1. Conversation A creates a room
+2. Conversation B joins with the room code
+3. Either side sends a relayed message to the paired peer
 
 ## Development
 
