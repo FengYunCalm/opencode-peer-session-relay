@@ -12,7 +12,8 @@ const allowedPackageRootImports = new Set([
 
 const allowedInternalSourceImports = new Set([
   "tests/support/relay-plugin-testkit.ts",
-  "tests/plugin/test-boundary-regression.test.ts"
+  "tests/plugin/test-boundary-regression.test.ts",
+  "tests/plugin/local-plugin-entry.test.ts"
 ]);
 
 const supportedExtensions = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
