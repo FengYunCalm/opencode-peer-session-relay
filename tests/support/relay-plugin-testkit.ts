@@ -20,6 +20,8 @@ export { initializeRelaySchema } from "../../packages/relay-plugin/src/internal/
 export { SessionLinkStore } from "../../packages/relay-plugin/src/internal/store/session-link-store.ts";
 export { TaskStore } from "../../packages/relay-plugin/src/internal/store/task-store.ts";
 export { RoomStore } from "../../packages/relay-plugin/src/internal/store/room-store.ts";
+export { ThreadStore } from "../../packages/relay-plugin/src/internal/store/thread-store.ts";
+export { MessageStore } from "../../packages/relay-plugin/src/internal/store/message-store.ts";
 export {
   getRelayPluginStateForTest,
   stopRelayPluginForTest as stopRelayPlugin
@@ -32,3 +34,4 @@ export { LoopGuard } from "../../packages/relay-plugin/src/runtime/loop-guard.ts
 export { createRelayPluginState } from "../../packages/relay-plugin/src/runtime/plugin-state.ts";
 export { ResponseObserver } from "../../packages/relay-plugin/src/runtime/response-observer.ts";
 export { SessionRegistry } from "../../packages/relay-plugin/src/runtime/session-registry.ts";
+export { buildTaskRelayPrompt, buildThreadRelayPrompt } from "../../packages/relay-plugin/src/runtime/prompt-preamble.ts";

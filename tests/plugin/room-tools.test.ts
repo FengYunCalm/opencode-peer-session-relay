@@ -32,8 +32,8 @@ afterEach(async () => {
 });
 
 describe("relay room tools", () => {
-  it("creates and joins a room from two sessions", async () => {
-    const databasePath = createTestDatabaseLocation("room-tools");
+  it("keeps the old private room flow unchanged", async () => {
+    const databasePath = createTestDatabaseLocation("room-tools-private");
     dbLocations.push(databasePath);
     const hooks = await RelayPlugin(createPluginInput(), {
       a2a: { port: 0 },
@@ -52,10 +52,10 @@ describe("relay room tools", () => {
       ask: async () => {}
     });
 
-    const roomCodeMatch = created?.match(/Room code: (\d{6})/);
-    expect(roomCodeMatch?.[1]).toBeDefined();
+    expect(created).toContain("Room kind: private");
+    const roomCode = created?.match(/Room code: (\d{6})/)?.[1];
 
-    const joined = await hooks.tool?.relay_room_join.execute({ roomCode: roomCodeMatch![1] }, {
+    const joined = await hooks.tool?.relay_room_join.execute({ roomCode: roomCode! }, {
       sessionID: "session-b",
       messageID: "message-b",
       agent: "build",
@@ -67,12 +67,14 @@ describe("relay room tools", () => {
     });
 
     expect(joined).toContain("Joined room");
-    const state = getRelayPluginStateForTest("project-room-tools");
-    expect(state?.runtime.roomStore.areSessionsPaired("session-a", "session-b")).toBe(true);
+    const state = getRelayPluginStateForTest("project-room-tools")!;
+    const room = state.runtime.roomStore.getRoomBySession("session-a")!;
+    expect(room.kind).toBe("private");
+    expect(state.runtime.roomStore.areSessionsPaired("session-a", "session-b")).toBe(true);
   });
 
-  it("sends a room message to the paired peer session", async () => {
-    const databasePath = createTestDatabaseLocation("room-send-tools");
+  it("creates a group room, joins with alias, and can broadcast or direct-message a member", async () => {
+    const databasePath = createTestDatabaseLocation("room-tools-group");
     dbLocations.push(databasePath);
     const promptAsync = vi.fn().mockResolvedValue({ data: true });
     const hooks = await RelayPlugin(createPluginInput("project-room-tools", promptAsync), {
@@ -81,17 +83,10 @@ describe("relay room tools", () => {
       runtime: { databasePath }
     });
 
-    await hooks.event?.({
-      event: {
-        type: "session.status",
-        properties: {
-          sessionID: "session-b",
-          status: { type: "idle" }
-        }
-      } as never
-    });
+    await hooks.event?.({ event: { type: "session.status", properties: { sessionID: "session-b", status: { type: "idle" } } } as never });
+    await hooks.event?.({ event: { type: "session.status", properties: { sessionID: "session-c", status: { type: "idle" } } } as never });
 
-    const created = await hooks.tool?.relay_room_create.execute({}, {
+    const created = await hooks.tool?.relay_room_create.execute({ kind: "group" }, {
       sessionID: "session-a",
       messageID: "message-a",
       agent: "build",
@@ -101,9 +96,10 @@ describe("relay room tools", () => {
       metadata: () => {},
       ask: async () => {}
     });
-    const roomCode = created?.match(/Room code: (\d{6})/)?.[1];
+    expect(created).toContain("Room kind: group");
+    const roomCode = created?.match(/Room code: (\d{6})/)?.[1]!;
 
-    await hooks.tool?.relay_room_join.execute({ roomCode: roomCode! }, {
+    const joinedB = await hooks.tool?.relay_room_join.execute({ roomCode, alias: "alpha" }, {
       sessionID: "session-b",
       messageID: "message-b",
       agent: "build",
@@ -113,9 +109,8 @@ describe("relay room tools", () => {
       metadata: () => {},
       ask: async () => {}
     });
-
-    const sent = await hooks.tool?.relay_room_send.execute({ message: "hello peer" }, {
-      sessionID: "session-a",
+    const joinedC = await hooks.tool?.relay_room_join.execute({ roomCode, alias: "beta" }, {
+      sessionID: "session-c",
       messageID: "message-c",
       agent: "build",
       directory: "C:/relay-project",
@@ -125,45 +120,12 @@ describe("relay room tools", () => {
       ask: async () => {}
     });
 
-    expect(sent).toContain("Sent to peer session: session-b");
-    expect(sent).toContain("Accepted: yes");
-    expect(promptAsync).toHaveBeenCalledWith({
-      path: { id: "session-b" },
-      body: {
-        system: undefined,
-        parts: [
-          {
-            type: "text",
-            text: expect.stringContaining("hello peer")
-          }
-        ]
-      }
-    });
-  });
+    expect(joinedB).toContain("Alias: alpha");
+    expect(joinedC).toContain("Alias: beta");
 
-  it("does not send a room message when the peer session is known busy", async () => {
-    const databasePath = createTestDatabaseLocation("room-send-busy");
-    dbLocations.push(databasePath);
-    const promptAsync = vi.fn().mockResolvedValue({ data: true });
-    const hooks = await RelayPlugin(createPluginInput("project-room-tools", promptAsync), {
-      a2a: { port: 0 },
-      routing: { mode: "pair" },
-      runtime: { databasePath }
-    });
-
-    await hooks.event?.({
-      event: {
-        type: "session.status",
-        properties: {
-          sessionID: "session-b",
-          status: { type: "busy" }
-        }
-      } as never
-    });
-
-    const created = await hooks.tool?.relay_room_create.execute({}, {
+    const members = await hooks.tool?.relay_room_members.execute({}, {
       sessionID: "session-a",
-      messageID: "message-a",
+      messageID: "message-d",
       agent: "build",
       directory: "C:/relay-project",
       worktree: "C:/relay-project",
@@ -171,22 +133,12 @@ describe("relay room tools", () => {
       metadata: () => {},
       ask: async () => {}
     });
-    const roomCode = created?.match(/Room code: (\d{6})/)?.[1];
+    expect(members).toContain("alpha");
+    expect(members).toContain("beta");
 
-    await hooks.tool?.relay_room_join.execute({ roomCode: roomCode! }, {
-      sessionID: "session-b",
-      messageID: "message-b",
-      agent: "build",
-      directory: "C:/relay-project",
-      worktree: "C:/relay-project",
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: async () => {}
-    });
-
-    const sent = await hooks.tool?.relay_room_send.execute({ message: "hello peer" }, {
+    const broadcast = await hooks.tool?.relay_room_send.execute({ message: "all-hands update" }, {
       sessionID: "session-a",
-      messageID: "message-c",
+      messageID: "message-e",
       agent: "build",
       directory: "C:/relay-project",
       worktree: "C:/relay-project",
@@ -194,9 +146,19 @@ describe("relay room tools", () => {
       metadata: () => {},
       ask: async () => {}
     });
+    expect(broadcast).toContain("Sent to peer session: group");
+    expect(promptAsync).toHaveBeenCalledTimes(2);
 
-    expect(sent).toContain("Accepted: no");
-    expect(sent).toContain("session is busy");
-    expect(promptAsync).not.toHaveBeenCalled();
+    const direct = await hooks.tool?.relay_room_send.execute({ message: "private task", targetAlias: "alpha" }, {
+      sessionID: "session-a",
+      messageID: "message-f",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+    expect(direct).toContain("Target alias: alpha");
   });
 });
