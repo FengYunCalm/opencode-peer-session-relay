@@ -1,6 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
-
 import { initializeRelaySchema } from "./schema.js";
+import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
 export type AuditEventRecord = {
   id: number;
@@ -11,10 +10,10 @@ export type AuditEventRecord = {
 };
 
 export class AuditStore {
-  private readonly database: DatabaseSync;
+  private readonly database: SqliteDatabase;
 
   constructor(location = ":memory:") {
-    this.database = new DatabaseSync(location);
+    this.database = openSqliteDatabase(location);
     initializeRelaySchema(this.database);
   }
 
@@ -22,10 +21,10 @@ export class AuditStore {
     const createdAt = Date.now();
     const result = this.database
       .prepare(`INSERT INTO relay_audit_events (task_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)`)
-      .run(taskId, eventType, JSON.stringify(payload), createdAt);
+      .run(taskId, eventType, JSON.stringify(payload), createdAt) as { lastInsertRowid?: number | bigint };
 
     return {
-      id: Number(result.lastInsertRowid),
+      id: Number(result.lastInsertRowid ?? 0),
       taskId,
       eventType,
       payload,

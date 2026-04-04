@@ -1,12 +1,11 @@
-import { DatabaseSync } from "node:sqlite";
-
 import { initializeRelaySchema } from "./schema.js";
+import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
 export class SessionLinkStore {
-  private readonly database: DatabaseSync;
+  private readonly database: SqliteDatabase;
 
   constructor(location = ":memory:") {
-    this.database = new DatabaseSync(location);
+    this.database = openSqliteDatabase(location);
     initializeRelaySchema(this.database);
   }
 

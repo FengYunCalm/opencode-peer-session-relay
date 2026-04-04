@@ -1,5 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
-
 import {
   artifactSchema,
   messageSchema,
@@ -11,6 +9,7 @@ import {
 } from "@opencode-peer-session-relay/a2a-protocol";
 
 import { initializeRelaySchema } from "./schema.js";
+import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
 export type StoredRelayTask = Task & {
   createdAt: number;
@@ -54,10 +53,10 @@ function parseArtifacts(value: string): Artifact[] {
 }
 
 export class TaskStore {
-  private readonly database: DatabaseSync;
+  private readonly database: SqliteDatabase;
 
   constructor(location = ":memory:") {
-    this.database = new DatabaseSync(location);
+    this.database = openSqliteDatabase(location);
     initializeRelaySchema(this.database);
   }
 
