@@ -54,4 +54,14 @@ export class SessionInjector {
       }
     });
   }
+
+  submitAsync(sessionID: string, text: string, system?: string): Promise<unknown> {
+    return this.client.session.promptAsync({
+      path: { id: sessionID },
+      body: {
+        system,
+        parts: [{ type: "text", text }]
+      }
+    });
+  }
 }

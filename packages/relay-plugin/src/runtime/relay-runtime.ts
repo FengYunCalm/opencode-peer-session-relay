@@ -13,17 +13,19 @@ import { createSendMessageStreamHandler } from "../a2a/handlers/send-message-str
 import { cancelTaskParamsSchema, getTaskParamsSchema, type InboundRelayRequest } from "../a2a/mapper/inbound-request.js";
 import { mapTaskStatusEvent, TaskEventHub } from "../a2a/mapper/outbound-events.js";
 import type { A2AHostResponse, JsonValue } from "../a2a/host.js";
-import type { RelayPluginConfig } from "../config.js";
 import { createRelayOpsMcpServer, type RelayOpsMcp } from "../internal/mcp/server.js";
 import { AuditStore } from "../internal/store/audit-store.js";
 import { SessionLinkStore } from "../internal/store/session-link-store.js";
 import { TaskStore, type StoredRelayTask } from "../internal/store/task-store.js";
+import type { RelayPluginConfig } from "../config.js";
 import { evaluateDelivery } from "./delivery-gate.js";
 import { HumanGuard } from "./human-guard.js";
 import { SessionInjector } from "./injector.js";
 import { LoopGuard } from "./loop-guard.js";
 import { ResponseObserver } from "./response-observer.js";
 import type { SessionRegistry } from "./session-registry.js";
+import { isRelayPairAllowed } from "../config.js";
+import { RoomStore } from "../internal/store/room-store.js";
 
 function jsonRpcSuccess(id: JsonRpcId, result: JsonValue): JsonValue {
   return {
@@ -68,8 +70,10 @@ function buildTaskPrompt(task: StoredRelayTask): string {
     return `A2A task ${task.taskId} arrived without a request body.`;
   }
 
+  const sourceSessionID = typeof task.metadata.sourceSessionID === "string" ? task.metadata.sourceSessionID : undefined;
   const sections = [
     "An A2A request has been delegated to this OpenCode session.",
+    sourceSessionID ? `Source Session ID: ${sourceSessionID}` : undefined,
     `Task ID: ${task.taskId}`,
     task.contextId ? `Context ID: ${task.contextId}` : undefined,
     "Requester content:",
@@ -134,6 +138,7 @@ export class RelayRuntime {
   readonly injector: SessionInjector;
   readonly observer: ResponseObserver;
   readonly sessionRegistry: SessionRegistry;
+  readonly roomStore: RoomStore;
 
   private readonly sendMessage;
   private readonly sendMessageStream;
@@ -151,6 +156,7 @@ export class RelayRuntime {
     this.taskStore = new TaskStore(databasePath);
     this.auditStore = new AuditStore(databasePath);
     this.sessionLinkStore = new SessionLinkStore(databasePath);
+    this.roomStore = new RoomStore(databasePath);
     this.injector = new SessionInjector(input.client);
     this.observer = new ResponseObserver(this.taskStore, this.auditStore, this.sessionLinkStore, this.eventHub);
 
@@ -161,6 +167,7 @@ export class RelayRuntime {
       eventHub: this.eventHub,
       humanGuard: this.humanGuard,
       loopGuard: this.loopGuard,
+      routeGuard: async (request: InboundRelayRequest) => this.assertRouteAllowed(request),
       executor: {
         dispatch: async (request: InboundRelayRequest & { taskId: string }) => this.dispatchTask(request)
       }
@@ -175,6 +182,7 @@ export class RelayRuntime {
   close(): void {
     this.taskStore.close();
     this.auditStore.close();
+    this.roomStore.close();
     this.sessionLinkStore.close();
   }
 
@@ -267,20 +275,78 @@ export class RelayRuntime {
       updatedAt: Date.now()
     });
 
-    if (status.type !== "idle" || this.humanGuard.isPaused(sessionID)) {
-      return;
-    }
-
     const nextTask = this.taskStore
       .listActiveTasks()
       .filter((task) => task.status === "submitted" && isTaskForSession(task, sessionID))
       .sort((left, right) => left.updatedAt - right.updatedAt)[0];
+
+    if (status.type !== "idle") {
+      if (nextTask) {
+        this.observer.updateStatus(nextTask.taskId, "working");
+      }
+      return;
+    }
+
+    if (this.humanGuard.isPaused(sessionID)) {
+      return;
+    }
 
     if (!nextTask) {
       return;
     }
 
     await this.dispatchStoredTask(nextTask, sessionID);
+  }
+
+  async sendRoomMessage(sourceSessionID: string, message: string): Promise<{
+    peerSessionID: string;
+    roomCode: string;
+    accepted: boolean;
+    reason?: string;
+  }> {
+    const room = this.roomStore.getRoomBySession(sourceSessionID);
+    if (!room) {
+      throw new Error(`No relay room is bound to session ${sourceSessionID}.`);
+    }
+
+    const peerSessionID = this.roomStore.getPeerSessionID(sourceSessionID);
+    if (!peerSessionID) {
+      throw new Error(`Room ${room.roomCode} does not have a connected peer yet.`);
+    }
+
+    if (this.humanGuard.isPaused(peerSessionID)) {
+      return {
+        peerSessionID,
+        roomCode: room.roomCode,
+        accepted: false,
+        reason: this.humanGuard.reason(peerSessionID) ?? "peer session is paused by human takeover"
+      };
+    }
+
+    const knownStatus = this.sessionRegistry.get(peerSessionID)?.status;
+    if (knownStatus && knownStatus.type !== "idle") {
+      return {
+        peerSessionID,
+        roomCode: room.roomCode,
+        accepted: false,
+        reason: evaluateDelivery(knownStatus).reason
+      };
+    }
+
+    const relayPrompt = [
+      `Relayed from paired session ${sourceSessionID}.`,
+      `Room code: ${room.roomCode}`,
+      "Incoming message:",
+      message
+    ].join("\n\n");
+
+    await this.injector.submitAsync(peerSessionID, relayPrompt);
+
+    return {
+      peerSessionID,
+      roomCode: room.roomCode,
+      accepted: true
+    };
   }
 
   async replayTask(taskId: string): Promise<StoredRelayTask | undefined> {
@@ -325,7 +391,6 @@ export class RelayRuntime {
   }
 
   private async dispatchStoredTask(task: StoredRelayTask, sessionID: string): Promise<{ sessionID: string }> {
-    this.observer.accept(task.taskId, sessionID);
     const decision = evaluateDelivery(this.sessionRegistry.get(sessionID)?.status);
     if (!decision.allowed) {
       this.auditStore.append(task.taskId, "task.deferred", {
@@ -336,9 +401,9 @@ export class RelayRuntime {
     }
 
     try {
-      await this.injector.injectAsync(sessionID, buildTaskPrompt(task));
+      await this.injector.submitAsync(sessionID, buildTaskPrompt(task));
+      this.observer.accept(task.taskId, sessionID);
       this.auditStore.append(task.taskId, "task.dispatched", { sessionID });
-      this.observer.updateStatus(task.taskId, "working");
       return { sessionID };
     } catch (error) {
       this.auditStore.append(task.taskId, "task.dispatch_failed", {
@@ -348,6 +413,22 @@ export class RelayRuntime {
       this.taskStore.updateStatus(task.taskId, "failed");
       throw error;
     }
+  }
+
+  private assertRouteAllowed(request: InboundRelayRequest): void {
+    if (isRelayPairAllowed(this.config, request.sourceSessionID, request.sessionID)) {
+      return;
+    }
+
+    if (request.sourceSessionID && request.sessionID && this.roomStore.areSessionsPaired(request.sourceSessionID, request.sessionID)) {
+      return;
+    }
+
+    throw new Error(
+      this.config.routing.mode === "pair"
+        ? `Relay pair is not allowed: ${request.sourceSessionID ?? "unknown-source"} -> ${request.sessionID ?? "unknown-target"}`
+        : "Relay route is not allowed"
+    );
   }
 
   private async *streamTaskEvents(id: JsonRpcId, task: Task, events: AsyncIterable<TaskEvent>): AsyncIterable<JsonValue> {
