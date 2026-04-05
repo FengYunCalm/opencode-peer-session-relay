@@ -18,16 +18,18 @@
 ## 当前架构
 
 - **公开协议：** A2A over HTTP JSON-RPC and SSE
-- **运行形态：** plugin-first；由插件负责 host 启动与 session bridge
+- **运行形态：** plugin-first 负责 session hook / compaction，MCP-first 负责稳定暴露 room/thread/message 工具
 - **投递门控：** `session.status` 是主要调度信号
-- **持久化：** 基于本地 SQLite 的 task、audit、session-link 与房间状态
-- **运维接口：** 仅保留内部 MCP，不作为公开的 agent-to-agent 接口
+- **持久化：** 基于本地 SQLite 的 task、audit、session-link、room、thread 与 message 状态
+- **能力暴露面：** 独立 `relay` MCP server 暴露 durable 协作工具，plugin tools 保留为兼容路径
 
 ## 已实现能力
 
 - Agent Card 暴露
 - `sendMessage`、`getTask`、`cancelTask`、`sendMessageStream`
-- 房间码配对流程：`relay_room_create`、`relay_room_join`、`relay_room_status`、`relay_room_send`
+- 私聊/群聊房间流程：`relay_room_create`、`relay_room_join`、`relay_room_status`、`relay_room_send`
+- 团队治理：`relay_room_members`、`relay_room_set_role`
+- durable 线程/消息能力：`relay_thread_create`、`relay_thread_list`、`relay_message_list`、`relay_message_send`、`relay_message_mark_read`、`relay_transcript_export`
 - SSE task event streaming
 - 基于空闲状态的 OpenCode session 投递
 - 去重、人类接管保护、重放路径与审计轨迹
@@ -36,8 +38,17 @@
 ## OpenCode skill 与本地插件工作流
 
 - 项目内 skill：`.opencode/skills/relay-room/SKILL.md`
-- 本地测试时使用的全局安装目标：`~/.config/opencode/plugins/opencode-a2a-relay.js`
-- 为兼容 OpenCode 1.3.6，本地路径插件采用 `default export { id, server }` 形状
+- 本地测试时使用的全局安装目标：
+  - plugin bundle：`~/.config/opencode/plugins/opencode-a2a-relay.js`
+  - relay MCP bundle：`~/.config/opencode/plugins/opencode-a2a-relay-mcp.js`
+- 全局 OpenCode 配置已经包含本地 `relay` MCP server
+- 为兼容 OpenCode 1.3.6，本地路径 plugin bundle 采用 `default export { id, server }` 形状
+
+### 为什么改成 MCP-first
+在长生命周期会话里，MCP 工具的可见性通常比 plugin tools 更稳定。所以当前推荐的稳定路径是：
+1. `relay` MCP server 暴露 room/thread/message/transcript 工具
+2. plugin hook 自动注入当前 session 上下文并在写消息后尝试唤醒 idle 会话
+3. plugin-room tools 只作为兼容兜底
 
 ### 私聊房间流程（保持不变）
 1. 会话 A 创建一个房间

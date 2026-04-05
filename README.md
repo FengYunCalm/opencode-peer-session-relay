@@ -18,16 +18,18 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 ## Current architecture
 
 - **Public contract:** A2A over HTTP JSON-RPC and SSE
-- **Runtime shape:** plugin-first; the plugin owns host bootstrap and session bridge logic
+- **Runtime shape:** plugin-first for session hooks and compaction, MCP-first for stable room/thread/message tool exposure
 - **Delivery gate:** `session.status` is the primary scheduling signal
-- **Persistence:** local SQLite-backed task, audit, session-link, and room state
-- **Operations surface:** internal MCP only, not the public agent-to-agent interface
+- **Persistence:** local SQLite-backed task, audit, session-link, room, thread, and message state
+- **Operations surface:** a dedicated `relay` MCP server now exposes the durable collaboration tools, while plugin tools remain as a compatibility path
 
 ## Implemented capabilities
 
 - Agent Card exposure
 - `sendMessage`, `getTask`, `cancelTask`, `sendMessageStream`
-- room-code pairing flow: `relay_room_create`, `relay_room_join`, `relay_room_status`, `relay_room_send`
+- private/group room flow: `relay_room_create`, `relay_room_join`, `relay_room_status`, `relay_room_send`
+- team governance: `relay_room_members`, `relay_room_set_role`
+- durable thread/message flow: `relay_thread_create`, `relay_thread_list`, `relay_message_list`, `relay_message_send`, `relay_message_mark_read`, `relay_transcript_export`
 - SSE task event streaming
 - idle-gated dispatch into OpenCode sessions
 - duplicate suppression, human takeover guard, replay path, and audit trail
@@ -36,8 +38,17 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 ## OpenCode skill and local plugin workflow
 
 - Project-local skill: `.opencode/skills/relay-room/SKILL.md`
-- Global install target used during local testing: `~/.config/opencode/plugins/opencode-a2a-relay.js`
-- For OpenCode 1.3.6 local-path plugin compatibility, the installed bundle uses `default export { id, server }`
+- Global install target used during local testing:
+  - plugin bundle: `~/.config/opencode/plugins/opencode-a2a-relay.js`
+  - relay MCP bundle: `~/.config/opencode/plugins/opencode-a2a-relay-mcp.js`
+- Global OpenCode config now includes a local MCP server entry named `relay`
+- For OpenCode 1.3.6 local-path plugin compatibility, the installed plugin bundle uses `default export { id, server }`
+
+### Why MCP-first
+Long-lived sessions may expose MCP tools more reliably than plugin tools. For that reason, the preferred stable path is:
+1. `relay` MCP server for room/thread/message tools
+2. plugin hooks for session-aware argument injection and wake-up behavior
+3. plugin-room tools only as a compatibility fallback
 
 ### Private room flow (unchanged)
 1. Conversation A creates a room
