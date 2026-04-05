@@ -12,6 +12,7 @@ export { A2ARelayHost } from "../../packages/relay-plugin/src/a2a/host.ts";
 export { cancelTaskParamsSchema, getTaskParamsSchema, mapSendMessageRequest, sendMessageParamsSchema } from "../../packages/relay-plugin/src/a2a/mapper/inbound-request.ts";
 export { TaskEventHub, mapArtifactUpdateEvent, mapTaskStatusEvent } from "../../packages/relay-plugin/src/a2a/mapper/outbound-events.ts";
 export { createRelayOpsMcpServer } from "../../packages/relay-plugin/src/internal/mcp/server.ts";
+export { RelayRoomOrchestrator } from "../../packages/relay-plugin/src/internal/orchestration/relay-room-orchestrator.ts";
 export { createTaskResource } from "../../packages/relay-plugin/src/internal/mcp/resources/task-resource.ts";
 export { createRelayReplayTool } from "../../packages/relay-plugin/src/internal/mcp/tools/relay-replay.ts";
 export { createRelayStatusTool } from "../../packages/relay-plugin/src/internal/mcp/tools/relay-status.ts";
@@ -35,3 +36,4 @@ export { createRelayPluginState } from "../../packages/relay-plugin/src/runtime/
 export { ResponseObserver } from "../../packages/relay-plugin/src/runtime/response-observer.ts";
 export { SessionRegistry } from "../../packages/relay-plugin/src/runtime/session-registry.ts";
 export { buildTaskRelayPrompt, buildThreadRelayPrompt } from "../../packages/relay-plugin/src/runtime/prompt-preamble.ts";
+export { createRelayBridgeMcpServer } from "../../packages/relay-plugin/src/relay-mcp-server.ts";

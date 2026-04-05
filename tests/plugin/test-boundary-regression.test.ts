@@ -13,7 +13,13 @@ const allowedPackageRootImports = new Set([
 const allowedInternalSourceImports = new Set([
   "tests/support/relay-plugin-testkit.ts",
   "tests/plugin/test-boundary-regression.test.ts",
-  "tests/plugin/local-plugin-entry.test.ts"
+  "tests/plugin/local-plugin-entry.test.ts",
+  "tests/plugin/relay-orchestration.test.ts",
+  "tests/plugin/mcp-first-hooks.test.ts",
+  "tests/plugin/session-id.test.ts",
+  "tests/plugin/relay-mcp-server.test.ts",
+  "tests/plugin/mcp-group-room.test.ts",
+  "tests/plugin/relay-mcp-room-coexistence.test.ts"
 ]);
 
 const supportedExtensions = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);

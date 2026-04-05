@@ -17,7 +17,8 @@ import type { RelayPluginConfig } from "../config.js";
 import { createRelayOpsMcpServer, type RelayOpsMcp } from "../internal/mcp/server.js";
 import { AuditStore } from "../internal/store/audit-store.js";
 import { MessageStore, type RelayMessage } from "../internal/store/message-store.js";
-import { RoomStore, type RelayRoomKind, type RelayRoomMemberRole } from "../internal/store/room-store.js";
+import { RelayRoomOrchestrator } from "../internal/orchestration/relay-room-orchestrator.js";
+import { RoomStore, type RelayRoom, type RelayRoomKind, type RelayRoomMemberRole } from "../internal/store/room-store.js";
 import { SessionLinkStore } from "../internal/store/session-link-store.js";
 import { TaskStore, type StoredRelayTask } from "../internal/store/task-store.js";
 import { ThreadStore, type RelayThread } from "../internal/store/thread-store.js";
@@ -106,6 +107,7 @@ export class RelayRuntime {
   readonly injector: SessionInjector;
   readonly observer: ResponseObserver;
   readonly sessionRegistry: SessionRegistry;
+  readonly relayOrchestrator: RelayRoomOrchestrator;
 
   private readonly sendMessage;
   private readonly sendMessageStream;
@@ -127,6 +129,10 @@ export class RelayRuntime {
     this.messageStore = new MessageStore(databasePath);
     this.injector = new SessionInjector(input.client);
     this.observer = new ResponseObserver(this.taskStore, this.auditStore, this.sessionLinkStore, this.eventHub);
+    this.relayOrchestrator = new RelayRoomOrchestrator(this.roomStore, this.threadStore, this.messageStore, {
+      resolveNotificationDecision: (sessionID) => this.resolveNotificationDecision(sessionID),
+      notifyThreadParticipant: (thread, sessionID, messages) => this.notifyThreadParticipant(thread, sessionID, messages)
+    });
 
     const sendMessageDependencies = {
       taskStore: this.taskStore,
@@ -210,6 +216,22 @@ export class RelayRuntime {
     }
   }
 
+  resolveRoomForSession(sessionID: string, roomCode?: string): RelayRoom {
+    return this.relayOrchestrator.resolveRoomForSession(sessionID, roomCode);
+  }
+
+  getPeerSessionID(sessionID: string, roomCode?: string): string | undefined {
+    return this.relayOrchestrator.getPeerSessionID(sessionID, roomCode);
+  }
+
+  createRoom(sessionID: string, kind: RelayRoomKind = "private"): RelayRoom {
+    return this.relayOrchestrator.createRoom(sessionID, kind);
+  }
+
+  joinRoom(roomCode: string, sessionID: string, alias?: string): RelayRoom {
+    return this.relayOrchestrator.joinRoom(roomCode, sessionID, alias);
+  }
+
   async onSessionStatus(sessionID: string, status: SessionStatus): Promise<void> {
     this.sessionRegistry.upsert({ sessionID, status, updatedAt: Date.now() });
 
@@ -239,71 +261,26 @@ export class RelayRuntime {
     await this.dispatchStoredTask(nextTask, sessionID);
   }
 
-  async sendRoomMessage(sourceSessionID: string, message: string, targetAlias?: string): Promise<{
+  async sendRoomMessage(sourceSessionID: string, message: string, targetAlias?: string, roomCode?: string): Promise<{
     peerSessionID: string;
     roomCode: string;
     threadId: string;
     accepted: boolean;
     reason?: string;
   }> {
-    const room = this.roomStore.getRoomBySession(sourceSessionID);
-    if (!room) {
-      throw new Error(`No relay room is bound to session ${sourceSessionID}.`);
-    }
+    return this.relayOrchestrator.sendRoomMessage(sourceSessionID, message, targetAlias, roomCode);
+  }
 
-    const actor = this.roomStore.getMember(room.roomCode, sourceSessionID);
-    if (!actor || actor.role === "observer") {
-      throw new Error(`Session ${sourceSessionID} is not allowed to send room messages in room ${room.roomCode}.`);
-    }
-
-    if (room.kind === "group") {
-      if (targetAlias) {
-        const target = this.roomStore.getMemberByAlias(room.roomCode, targetAlias);
-        if (!target) {
-          throw new Error(`Alias ${targetAlias} does not exist in room ${room.roomCode}.`);
-        }
-        const thread = this.threadStore.ensureDirectThread(room.roomCode, [sourceSessionID, target.sessionID], sourceSessionID);
-        const result = await this.sendThreadMessage({ threadId: thread.threadId, senderSessionID: sourceSessionID, message, messageType: "relay" });
-        return {
-          peerSessionID: target.sessionID,
-          roomCode: room.roomCode,
-          threadId: thread.threadId,
-          accepted: true,
-          reason: result.queuedRecipients.find((entry) => entry.sessionID === target.sessionID)?.reason
-        };
+  async flushPendingForKnownIdleSessions(): Promise<boolean> {
+    let notified = false;
+    for (const session of this.sessionRegistry.entries()) {
+      if (session.status?.type !== "idle" || this.humanGuard.isPaused(session.sessionID)) {
+        continue;
       }
-
-      const groupThread = this.threadStore.ensureGroupThread(room.roomCode, this.roomStore.getMemberSessionIDs(room.roomCode), this.roomStore.getOwner(room.roomCode).sessionID, "room-main");
-      const result = await this.sendThreadMessage({ threadId: groupThread.threadId, senderSessionID: sourceSessionID, message, messageType: "relay" });
-      return {
-        peerSessionID: "group",
-        roomCode: room.roomCode,
-        threadId: groupThread.threadId,
-        accepted: true,
-        reason: result.queuedRecipients.length > 0 ? "some members are currently queued" : undefined
-      };
+      const flushed = await this.notifyPendingMessages(session.sessionID);
+      notified = notified || flushed;
     }
-
-    const activeWritableMembers = this.roomStore.listWritableMembers(room.roomCode);
-    if (activeWritableMembers.length > 2) {
-      throw new Error(`Room ${room.roomCode} has multiple active members; use relay_thread_create and relay_message_send for multi-agent messaging.`);
-    }
-
-    const peerSessionID = this.roomStore.getPeerSessionID(sourceSessionID);
-    if (!peerSessionID) {
-      throw new Error(`Room ${room.roomCode} does not have a connected peer yet.`);
-    }
-
-    const thread = this.threadStore.ensureDirectThread(room.roomCode, [sourceSessionID, peerSessionID], sourceSessionID);
-    const result = await this.sendThreadMessage({ threadId: thread.threadId, senderSessionID: sourceSessionID, message, messageType: "relay" });
-
-    return {
-      peerSessionID,
-      roomCode: room.roomCode,
-      threadId: thread.threadId,
-      accepted: true,
-      reason: result.queuedRecipients.find((entry) => entry.sessionID === peerSessionID)?.reason
-    };
+    return notified;
   }
 
   async replayTask(taskId: string): Promise<StoredRelayTask | undefined> {
@@ -329,109 +306,37 @@ export class RelayRuntime {
   }
 
   listThreads(options: { sessionID?: string; roomCode?: string }): unknown {
-    if (options.roomCode) {
-      return this.threadStore.listThreadsForRoom(options.roomCode).map((thread) => this.decorateThread(thread));
-    }
-    if (options.sessionID) {
-      return this.threadStore.listThreadsForSession(options.sessionID).map(({ participant, ...thread }) => ({
-        ...this.decorateThread(thread),
-        participant
-      }));
-    }
-    return [];
+    return this.relayOrchestrator.listThreads(options);
   }
 
-  listRoomMembers(roomCode: string): unknown {
-    return this.roomStore.listMembers(roomCode);
+  listRoomMembers(roomCodeOrSession: string, sessionID?: string): unknown {
+    return this.relayOrchestrator.listRoomMembers(roomCodeOrSession, sessionID);
   }
 
-  setRoomMemberRole(roomCode: string, actorSessionID: string, targetSessionID: string, role: RelayRoomMemberRole): unknown {
-    const actor = this.roomStore.getMember(roomCode, actorSessionID);
-    if (!actor || actor.role !== "owner") {
-      throw new Error(`Only the room owner can change member roles in room ${roomCode}.`);
-    }
-
-    const updated = this.roomStore.setMemberRole(roomCode, targetSessionID, role);
-    this.ensureDefaultThreadsForRoom(roomCode);
-    return updated;
+  setRoomMemberRole(roomCode: string | undefined, actorSessionID: string, targetSessionID: string, role: RelayRoomMemberRole): unknown {
+    return this.relayOrchestrator.setRoomMemberRole(roomCode, actorSessionID, targetSessionID, role);
   }
 
   createThread(input: {
-    roomCode: string;
+    roomCode?: string;
     kind: "direct" | "group";
     createdBySessionID: string;
     participantSessionIDs: string[];
     title?: string;
   }): RelayThread {
-    const room = this.roomStore.getRoom(input.roomCode);
-    if (!room) {
-      throw new Error(`Room ${input.roomCode} does not exist.`);
-    }
-
-    const actor = this.roomStore.getMember(input.roomCode, input.createdBySessionID);
-    if (!actor || actor.role === "observer") {
-      throw new Error(`Session ${input.createdBySessionID} is not allowed to create threads in room ${input.roomCode}.`);
-    }
-
-    const memberIDs = new Set(this.roomStore.getMemberSessionIDs(input.roomCode));
-    for (const participantSessionID of input.participantSessionIDs) {
-      if (!memberIDs.has(participantSessionID)) {
-        throw new Error(`Session ${participantSessionID} is not an active member of room ${input.roomCode}.`);
-      }
-    }
-
-    if (!input.participantSessionIDs.includes(input.createdBySessionID)) {
-      throw new Error(`Thread creator ${input.createdBySessionID} must be part of the thread participants.`);
-    }
-
-    if (room.kind === "private") {
-      if (input.kind !== "direct") {
-        throw new Error(`Private rooms only allow direct threads.`);
-      }
-      const owner = this.roomStore.getOwner(input.roomCode);
-      if (input.participantSessionIDs.length !== 2) {
-        throw new Error(`Direct threads must contain exactly 2 participants.`);
-      }
-      if (!input.participantSessionIDs.includes(owner.sessionID)) {
-        throw new Error(`Direct threads must include the room owner ${owner.sessionID}.`);
-      }
-      return this.threadStore.ensureDirectThread(input.roomCode, input.participantSessionIDs, input.createdBySessionID);
-    }
-
-    if (input.kind === "group") {
-      if (actor.role !== "owner") {
-        throw new Error(`Only the room owner can create group threads in room ${input.roomCode}.`);
-      }
-      return this.threadStore.createGroupThread(input.roomCode, input.participantSessionIDs, input.createdBySessionID, input.title);
-    }
-
-    const writableMemberIDs = new Set(this.roomStore.listWritableMembers(input.roomCode).map((member) => member.sessionID));
-    if (input.participantSessionIDs.length !== 2) {
-      throw new Error(`Direct threads must contain exactly 2 participants.`);
-    }
-    for (const participantSessionID of input.participantSessionIDs) {
-      if (!writableMemberIDs.has(participantSessionID)) {
-        throw new Error(`Direct threads in group rooms require writable members only.`);
-      }
-    }
-
-    return this.threadStore.ensureDirectThread(input.roomCode, input.participantSessionIDs, input.createdBySessionID);
+    return this.relayOrchestrator.createThread(input);
   }
 
   listMessages(threadId: string, afterSeq = 0, limit = 100): RelayMessage[] {
-    return this.messageStore.listMessages(threadId, afterSeq, limit);
+    return this.relayOrchestrator.listMessages(threadId, afterSeq, limit);
   }
 
   markThreadRead(threadId: string, sessionID: string, seq: number): unknown {
-    return this.threadStore.markRead(threadId, sessionID, seq);
+    return this.relayOrchestrator.markThreadRead(threadId, sessionID, seq);
   }
 
   exportTranscript(threadId: string): unknown {
-    const thread = this.threadStore.getThread(threadId);
-    if (!thread) {
-      throw new Error(`Thread ${threadId} does not exist.`);
-    }
-    return this.messageStore.exportTranscript(thread, this.threadStore.listParticipants(threadId));
+    return this.relayOrchestrator.exportTranscript(threadId);
   }
 
   async sendThreadMessage(input: {
@@ -445,53 +350,7 @@ export class RelayRuntime {
     notifiedRecipients: string[];
     queuedRecipients: Array<{ sessionID: string; reason: string }>;
   }> {
-    const thread = this.threadStore.getThread(input.threadId);
-    if (!thread) {
-      throw new Error(`Thread ${input.threadId} does not exist.`);
-    }
-
-    const senderParticipant = this.threadStore.getParticipant(input.threadId, input.senderSessionID);
-    if (!senderParticipant) {
-      throw new Error(`Sender ${input.senderSessionID} is not part of thread ${input.threadId}.`);
-    }
-
-    const senderRole = this.roomStore.getMember(thread.roomCode, input.senderSessionID)?.role;
-    if (!senderRole || senderRole === "observer") {
-      throw new Error(`Session ${input.senderSessionID} is not allowed to send messages in thread ${input.threadId}.`);
-    }
-
-    const message = this.messageStore.appendMessage({
-      threadId: input.threadId,
-      senderSessionID: input.senderSessionID,
-      messageType: input.messageType ?? "relay",
-      body: { text: input.message }
-    });
-    this.threadStore.touchThread(input.threadId);
-    this.threadStore.markRead(input.threadId, input.senderSessionID, message.seq);
-    this.threadStore.markNotified(input.threadId, input.senderSessionID, message.seq);
-
-    const queuedRecipients: Array<{ sessionID: string; reason: string }> = [];
-    const notifiedRecipients: string[] = [];
-    for (const participant of this.threadStore.listParticipants(input.threadId)) {
-      if (participant.sessionID === input.senderSessionID) continue;
-
-      const decision = this.resolveNotificationDecision(participant.sessionID);
-      if (!decision.allowed) {
-        queuedRecipients.push({ sessionID: participant.sessionID, reason: decision.reason });
-        continue;
-      }
-
-      await this.notifyThreadParticipant(thread, participant.sessionID, [message]);
-      this.threadStore.markNotified(input.threadId, participant.sessionID, message.seq);
-      notifiedRecipients.push(participant.sessionID);
-    }
-
-    return {
-      threadId: input.threadId,
-      seq: message.seq,
-      notifiedRecipients,
-      queuedRecipients
-    };
+    return this.relayOrchestrator.sendThreadMessage(input);
   }
 
   private async dispatchTask(request: InboundRelayRequest & { taskId: string }): Promise<{ sessionID?: string }> {
@@ -546,21 +405,7 @@ export class RelayRuntime {
   }
 
   ensureDefaultThreadsForRoom(roomCode: string): void {
-    const room = this.roomStore.getRoom(roomCode);
-    const owner = this.roomStore.getOwner(roomCode);
-    const activeMembers = this.roomStore.listMembers(roomCode);
-    const writableMembers = activeMembers.filter((member) => member.role !== "observer");
-
-    if (room?.kind === "group") {
-      this.threadStore.ensureGroupThread(roomCode, activeMembers.map((member) => member.sessionID), owner.sessionID, "room-main");
-    }
-
-    for (const member of writableMembers) {
-      if (member.sessionID === owner.sessionID) {
-        continue;
-      }
-      this.threadStore.ensureDirectThread(roomCode, [owner.sessionID, member.sessionID], owner.sessionID);
-    }
+    this.relayOrchestrator.ensureDefaultThreadsForRoom(roomCode);
   }
 
   private async notifyPendingMessages(sessionID: string): Promise<boolean> {
@@ -589,7 +434,7 @@ export class RelayRuntime {
         await this.notifyThreadParticipant(entry, sessionID, unreadMessages);
         const lastDeliveredSeq = unreadMessages[unreadMessages.length - 1]?.seq ?? lastNotifiedSeq;
         this.threadStore.markNotified(entry.threadId, sessionID, lastDeliveredSeq);
-      notifiedAny = true;
+        notifiedAny = true;
       }
     }
 
@@ -603,7 +448,7 @@ export class RelayRuntime {
 
     const knownStatus = this.sessionRegistry.get(sessionID)?.status;
     if (!knownStatus) {
-      return { allowed: false, reason: "session status is unknown" };
+      return { allowed: true, reason: "session status is unknown; delivery attempted optimistically" };
     }
 
     return evaluateDelivery(knownStatus);
@@ -626,14 +471,6 @@ export class RelayRuntime {
       senderAliases
     });
     await this.injector.submitAsync(sessionID, prompt);
-  }
-
-  private decorateThread(thread: RelayThread): RelayThread & { latestSeq: number; participantCount: number } {
-    return {
-      ...thread,
-      latestSeq: this.messageStore.getLatestSeq(thread.threadId),
-      participantCount: this.threadStore.listParticipants(thread.threadId).length
-    };
   }
 
   private async *streamTaskEvents(id: JsonRpcId, task: Task, events: AsyncIterable<TaskEvent>): AsyncIterable<JsonValue> {

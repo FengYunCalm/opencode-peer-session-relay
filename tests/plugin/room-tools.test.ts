@@ -83,9 +83,6 @@ describe("relay room tools", () => {
       runtime: { databasePath }
     });
 
-    await hooks.event?.({ event: { type: "session.status", properties: { sessionID: "session-b", status: { type: "idle" } } } as never });
-    await hooks.event?.({ event: { type: "session.status", properties: { sessionID: "session-c", status: { type: "idle" } } } as never });
-
     const created = await hooks.tool?.relay_room_create.execute({ kind: "group" }, {
       sessionID: "session-a",
       messageID: "message-a",
@@ -160,5 +157,133 @@ describe("relay room tools", () => {
       ask: async () => {}
     });
     expect(direct).toContain("Target alias: alpha");
+  });
+
+  it("sends a private-room message to the latest rejoined peer session", async () => {
+    const databasePath = createTestDatabaseLocation("room-tools-private-rejoin");
+    dbLocations.push(databasePath);
+    const promptAsync = vi.fn().mockResolvedValue({ data: true });
+    const hooks = await RelayPlugin(createPluginInput("project-room-tools-rejoin", promptAsync), {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const created = await hooks.tool?.relay_room_create.execute({}, {
+      sessionID: "session-owner",
+      messageID: "message-a",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+    const roomCode = created?.match(/Room code: (\d{6})/)?.[1]!;
+
+    await hooks.tool?.relay_room_join.execute({ roomCode }, {
+      sessionID: "session-old",
+      messageID: "message-b",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    await hooks.tool?.relay_room_join.execute({ roomCode }, {
+      sessionID: "session-new",
+      messageID: "message-c",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    const sent = await hooks.tool?.relay_room_send.execute({ message: "hello latest peer" }, {
+      sessionID: "session-owner",
+      messageID: "message-d",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    expect(sent).toContain("Sent to peer session: session-new");
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ path: { id: "session-new" } });
+  });
+
+  it("shows the correct private-room peer even when the same owner is also in a group room", async () => {
+    const databasePath = createTestDatabaseLocation("room-tools-private-status-multiroom");
+    dbLocations.push(databasePath);
+    const hooks = await RelayPlugin(createPluginInput("project-room-tools-status-multiroom"), {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const privateCreated = await hooks.tool?.relay_room_create.execute({}, {
+      sessionID: "session-owner",
+      messageID: "message-a",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+    const privateRoomCode = privateCreated?.match(/Room code: (\d{6})/)?.[1]!;
+    await hooks.tool?.relay_room_join.execute({ roomCode: privateRoomCode }, {
+      sessionID: "session-private-peer",
+      messageID: "message-b",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    const groupCreated = await hooks.tool?.relay_room_create.execute({ kind: "group" }, {
+      sessionID: "session-owner",
+      messageID: "message-c",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+    const groupRoomCode = groupCreated?.match(/Room code: (\d{6})/)?.[1]!;
+    await hooks.tool?.relay_room_join.execute({ roomCode: groupRoomCode, alias: "alpha" }, {
+      sessionID: "session-group-a",
+      messageID: "message-d",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    const status = await hooks.tool?.relay_room_status.execute({ roomCode: privateRoomCode }, {
+      sessionID: "session-owner",
+      messageID: "message-e",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    expect(status).toContain(`Room code: ${privateRoomCode}`);
+    expect(status).toContain("Peer session: session-private-peer");
   });
 });

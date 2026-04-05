@@ -8,6 +8,7 @@ import { buildCompactionContext } from "./runtime/compaction-anchor.js";
 import { createRelayPluginState, type RelayPluginState } from "./runtime/plugin-state.js";
 import { readRelayPluginState, registerRelayPluginState } from "./runtime/plugin-instance-registry.js";
 import { RelayRuntime } from "./runtime/relay-runtime.js";
+import { isRelayCurrentSessionPlaceholder, shouldInjectRelaySessionID } from "./session-id.js";
 import { SessionRegistry } from "./runtime/session-registry.js";
 
 export const pluginPackageName = "@opencode-peer-session-relay/relay-plugin";
@@ -29,6 +30,66 @@ function parseParticipantSessionIDs(value: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+const relayToolSuffixes = [
+  "room_create",
+  "room_join",
+  "room_status",
+  "room_send",
+  "room_members",
+  "room_set_role",
+  "thread_create",
+  "thread_list",
+  "message_send",
+  "message_mark_read",
+  "message_list",
+  "transcript_export"
+] as const;
+
+type RelayToolSuffix = typeof relayToolSuffixes[number];
+
+function getRelayToolSuffix(toolID: string): RelayToolSuffix | undefined {
+  for (const suffix of relayToolSuffixes) {
+    if (
+      toolID === suffix
+      || toolID === `relay_${suffix}`
+      || toolID.endsWith(`__${suffix}`)
+      || toolID.endsWith(`.${suffix}`)
+      || toolID.endsWith(`:${suffix}`)
+      || toolID.endsWith(`/${suffix}`)
+    ) {
+      return suffix;
+    }
+  }
+
+  return undefined;
+}
+
+function applyRelaySessionDefaults(toolID: string, args: Record<string, unknown>, sessionID: string) {
+  const suffix = getRelayToolSuffix(toolID);
+  if (!suffix) {
+    return;
+  }
+
+  if (["room_create", "room_join", "room_status", "room_send", "room_members"].includes(suffix) && shouldInjectRelaySessionID(args.sessionID)) {
+    args.sessionID = sessionID;
+  }
+  if (suffix === "room_set_role" && shouldInjectRelaySessionID(args.actorSessionID)) {
+    args.actorSessionID = sessionID;
+  }
+  if (suffix === "thread_create" && shouldInjectRelaySessionID(args.createdBySessionID)) {
+    args.createdBySessionID = sessionID;
+  }
+  if (suffix === "thread_list" && (isRelayCurrentSessionPlaceholder(args.sessionID) || (args.roomCode === undefined && shouldInjectRelaySessionID(args.sessionID)))) {
+    args.sessionID = sessionID;
+  }
+  if (suffix === "message_send" && shouldInjectRelaySessionID(args.senderSessionID)) {
+    args.senderSessionID = sessionID;
+  }
+  if (suffix === "message_mark_read" && shouldInjectRelaySessionID(args.sessionID)) {
+    args.sessionID = sessionID;
+  }
 }
 
 export const RelayPlugin: Plugin = async (input, options) => {
@@ -57,219 +118,241 @@ export const RelayPlugin: Plugin = async (input, options) => {
     registerRelayPluginState(projectKey, state);
   }
 
+  const relayTools = {
+    relay_room_create: tool({
+      description: "Create a private or group relay room and return the room code",
+      args: {
+        kind: tool.schema.string().optional()
+      },
+      execute: async ({ kind }, context) => {
+        const normalizedKind = kind === "group" ? "group" : "private";
+        const room = state.runtime.createRoom(context.sessionID, normalizedKind);
+        return [
+          `Room code: ${room.roomCode}`,
+          `Room kind: ${room.kind}`,
+          `Creator session: ${room.createdBySessionID}`,
+          room.kind === "group"
+            ? "Tell other conversations to join this room with an alias."
+            : "Tell the other conversation to use the relay-room skill and join this room code."
+        ].join("\n");
+      }
+    }),
+    relay_room_join: tool({
+      description: "Join a relay room with a room code; group rooms require an alias",
+      args: {
+        roomCode: tool.schema.string().min(1),
+        alias: tool.schema.string().optional()
+      },
+      execute: async ({ roomCode, alias }, context) => {
+        const room = state.runtime.joinRoom(roomCode, context.sessionID, alias);
+        const peerSessionID = state.runtime.getPeerSessionID(context.sessionID, room.roomCode);
+        return [
+          `Joined room: ${room.roomCode}`,
+          `Room kind: ${room.kind}`,
+          `Current session: ${context.sessionID}`,
+          alias ? `Alias: ${alias}` : undefined,
+          `Peer session: ${peerSessionID ?? "waiting"}`
+        ].filter(Boolean).join("\n");
+      }
+    }),
+    relay_room_status: tool({
+      description: "Show the current relay room binding for this conversation",
+      args: {
+        roomCode: tool.schema.string().optional()
+      },
+      execute: async ({ roomCode }, context) => {
+        const room = state.runtime.resolveRoomForSession(context.sessionID, roomCode);
+        const peerSessionID = room.kind === "private" ? (state.runtime.getPeerSessionID(context.sessionID, room.roomCode) ?? "waiting") : "group";
+        return [
+          `Room code: ${room.roomCode}`,
+          `Room kind: ${room.kind}`,
+          `Status: ${room.status}`,
+          `Current session: ${context.sessionID}`,
+          `Peer session: ${peerSessionID}`
+        ].join("\n");
+      }
+    }),
+    relay_room_send: tool({
+      description: "Send a message in the current relay room; group rooms may target a specific alias",
+      args: {
+        roomCode: tool.schema.string().optional(),
+        message: tool.schema.string().min(1),
+        targetAlias: tool.schema.string().optional()
+      },
+      execute: async ({ roomCode, message, targetAlias }, context) => {
+        const result = await state.runtime.sendRoomMessage(context.sessionID, message, targetAlias, roomCode);
+        return [
+          `Sent to peer session: ${result.peerSessionID}`,
+          `Room code: ${result.roomCode}`,
+          `Thread ID: ${result.threadId}`,
+          `Accepted: ${result.accepted ? "yes" : "no"}`,
+          targetAlias ? `Target alias: ${targetAlias}` : undefined,
+          result.reason ? `Reason: ${result.reason}` : undefined,
+          `Message length: ${message.length}`
+        ].filter(Boolean).join("\n");
+      }
+    }),
+    relay_room_members: tool({
+      description: "List active members in the current relay room",
+      args: {
+        roomCode: tool.schema.string().optional()
+      },
+      execute: async ({ roomCode }, context) => {
+        const members = state.runtime.listRoomMembers(roomCode ?? "", context.sessionID);
+        const room = state.runtime.resolveRoomForSession(context.sessionID, roomCode);
+        return JSON.stringify({
+          roomCode: room.roomCode,
+          roomKind: room.kind,
+          members
+        }, null, 2);
+      }
+    }),
+    relay_room_set_role: tool({
+      description: "Set the role of a room member; only the room owner may do this",
+      args: {
+        roomCode: tool.schema.string().optional(),
+        targetSessionID: tool.schema.string().min(1),
+        role: tool.schema.string().min(1)
+      },
+      execute: async ({ roomCode, targetSessionID, role }, context) => {
+        const normalizedRole = role === "observer" ? "observer" : role === "owner" ? "owner" : "member";
+        const updated = state.runtime.setRoomMemberRole(roomCode, context.sessionID, targetSessionID, normalizedRole);
+        return JSON.stringify(updated, null, 2);
+      }
+    }),
+    relay_thread_create: tool({
+      description: "Create a private or group durable thread inside the current relay room",
+      args: {
+        roomCode: tool.schema.string().optional(),
+        kind: tool.schema.string().min(1),
+        participantSessionIDs: tool.schema.string().min(1),
+        title: tool.schema.string().optional()
+      },
+      execute: async ({ roomCode, kind, participantSessionIDs, title }, context) => {
+        const room = state.runtime.resolveRoomForSession(context.sessionID, roomCode);
+
+        const participants = parseParticipantSessionIDs(participantSessionIDs);
+        if (!participants.includes(context.sessionID)) {
+          participants.unshift(context.sessionID);
+        }
+
+        const thread = state.runtime.createThread({
+          roomCode,
+          kind: kind === "group" ? "group" : "direct",
+          createdBySessionID: context.sessionID,
+          participantSessionIDs: participants,
+          title
+        });
+
+        return JSON.stringify(thread, null, 2);
+      }
+    }),
+    relay_thread_list: tool({
+      description: "List durable threads for the current relay room or session",
+      args: {
+        roomCode: tool.schema.string().optional(),
+        scope: tool.schema.string().optional()
+      },
+      execute: async ({ roomCode, scope }, context) => {
+        if (scope === "room") {
+          const resolvedRoom = state.runtime.resolveRoomForSession(context.sessionID, roomCode);
+          return JSON.stringify(state.runtime.listThreads({ roomCode: resolvedRoom.roomCode }), null, 2);
+        }
+        return JSON.stringify(state.runtime.listThreads({ sessionID: context.sessionID }), null, 2);
+      }
+    }),
+    relay_message_list: tool({
+      description: "List messages from a durable relay thread",
+      args: {
+        threadId: tool.schema.string().min(1),
+        afterSeq: tool.schema.number().int().nonnegative().optional(),
+        limit: tool.schema.number().int().positive().optional()
+      },
+      execute: async ({ threadId, afterSeq, limit }) => JSON.stringify(state.runtime.listMessages(threadId, afterSeq, limit), null, 2)
+    }),
+    relay_message_send: tool({
+      description: "Append a durable message into a relay thread",
+      args: {
+        threadId: tool.schema.string().min(1),
+        message: tool.schema.string().min(1),
+        messageType: tool.schema.string().optional()
+      },
+      execute: async ({ threadId, message, messageType }, context) => {
+        const result = await state.runtime.sendThreadMessage({
+          threadId,
+          senderSessionID: context.sessionID,
+          message,
+          messageType
+        });
+        return JSON.stringify(result, null, 2);
+      }
+    }),
+    relay_message_mark_read: tool({
+      description: "Advance the read cursor for the current session in a thread",
+      args: {
+        threadId: tool.schema.string().min(1),
+        seq: tool.schema.number().int().nonnegative()
+      },
+      execute: async ({ threadId, seq }, context) => JSON.stringify(state.runtime.markThreadRead(threadId, context.sessionID, seq), null, 2)
+    }),
+    relay_transcript_export: tool({
+      description: "Export the full durable transcript for a thread",
+      args: {
+        threadId: tool.schema.string().min(1)
+      },
+      execute: async ({ threadId }) => JSON.stringify(state.runtime.exportTranscript(threadId), null, 2)
+    })
+  } as const;
+
+  const namespacedRelayTools = {
+    "mcp__relay__room_create": relayTools.relay_room_create,
+    "mcp__relay__room_join": relayTools.relay_room_join,
+    "mcp__relay__room_status": relayTools.relay_room_status,
+    "mcp__relay__room_send": relayTools.relay_room_send,
+    "mcp__relay__room_members": relayTools.relay_room_members,
+    "mcp__relay__room_set_role": relayTools.relay_room_set_role,
+    "mcp__relay__thread_create": relayTools.relay_thread_create,
+    "mcp__relay__thread_list": relayTools.relay_thread_list,
+    "mcp__relay__message_list": relayTools.relay_message_list,
+    "mcp__relay__message_send": relayTools.relay_message_send,
+    "mcp__relay__message_mark_read": relayTools.relay_message_mark_read,
+    "mcp__relay__transcript_export": relayTools.relay_transcript_export
+  } as const;
+
   return {
     event: async ({ event }) => {
-      if (event.type !== "session.status") {
+      if (event.type !== "session.status" && event.type !== "session.idle") {
         return;
       }
 
       const sessionID = tryExtractSessionID(event);
-      const status = event.properties.status;
       if (!sessionID) {
         return;
       }
 
+      const status = event.type === "session.idle" ? { type: "idle" as const } : event.properties.status;
+
       await state.runtime.onSessionStatus(sessionID, status);
     },
     tool: {
-      relay_room_create: tool({
-        description: "Create a private or group relay room and return the room code",
-        args: {
-          kind: tool.schema.string().optional()
-        },
-        execute: async ({ kind }, context) => {
-          const normalizedKind = kind === "group" ? "group" : "private";
-          const room = state.runtime.roomStore.createRoom(context.sessionID, normalizedKind);
-          state.runtime.ensureDefaultThreadsForRoom(room.roomCode);
-          return [
-            `Room code: ${room.roomCode}`,
-            `Room kind: ${room.kind}`,
-            `Creator session: ${room.createdBySessionID}`,
-            room.kind === "group"
-              ? "Tell other conversations to join this room with an alias."
-              : "Tell the other conversation to use the relay-room skill and join this room code."
-          ].join("\n");
-        }
-      }),
-      relay_room_join: tool({
-        description: "Join a relay room with a room code; group rooms require an alias",
-        args: {
-          roomCode: tool.schema.string().min(1),
-          alias: tool.schema.string().optional()
-        },
-        execute: async ({ roomCode, alias }, context) => {
-          const room = state.runtime.roomStore.joinRoom(roomCode, context.sessionID, alias);
-          state.runtime.ensureDefaultThreadsForRoom(room.roomCode);
-          const peerSessionID = state.runtime.roomStore.getPeerSessionID(context.sessionID);
-          return [
-            `Joined room: ${room.roomCode}`,
-            `Room kind: ${room.kind}`,
-            `Current session: ${context.sessionID}`,
-            alias ? `Alias: ${alias}` : undefined,
-            `Peer session: ${peerSessionID ?? "waiting"}`
-          ].filter(Boolean).join("\n");
-        }
-      }),
-      relay_room_status: tool({
-        description: "Show the current relay room binding for this conversation",
-        args: {},
-        execute: async (_args, context) => {
-          const room = state.runtime.roomStore.getRoomBySession(context.sessionID);
-          if (!room) {
-            return `No relay room is bound to session ${context.sessionID}.`;
-          }
+      ...relayTools,
+      ...namespacedRelayTools
+    },
+    "tool.execute.before": async ({ tool, sessionID }, output) => {
+      if (!getRelayToolSuffix(tool)) {
+        return;
+      }
 
-          const peerSessionID = state.runtime.roomStore.getPeerSessionID(context.sessionID) ?? "waiting";
-          return [
-            `Room code: ${room.roomCode}`,
-            `Room kind: ${room.kind}`,
-            `Status: ${room.status}`,
-            `Current session: ${context.sessionID}`,
-            `Peer session: ${peerSessionID}`
-          ].join("\n");
-        }
-      }),
-      relay_room_send: tool({
-        description: "Send a message in the current relay room; group rooms may target a specific alias",
-        args: {
-          message: tool.schema.string().min(1),
-          targetAlias: tool.schema.string().optional()
-        },
-        execute: async ({ message, targetAlias }, context) => {
-          const result = await state.runtime.sendRoomMessage(context.sessionID, message, targetAlias);
-          return [
-            `Sent to peer session: ${result.peerSessionID}`,
-            `Room code: ${result.roomCode}`,
-            `Thread ID: ${result.threadId}`,
-            `Accepted: ${result.accepted ? "yes" : "no"}`,
-            targetAlias ? `Target alias: ${targetAlias}` : undefined,
-            result.reason ? `Reason: ${result.reason}` : undefined,
-            `Message length: ${message.length}`
-          ].filter(Boolean).join("\n");
-        }
-      }),
-      relay_room_members: tool({
-        description: "List active members in the current relay room",
-        args: {},
-        execute: async (_args, context) => {
-          const room = state.runtime.roomStore.getRoomBySession(context.sessionID);
-          if (!room) {
-            throw new Error(`No relay room is bound to session ${context.sessionID}.`);
-          }
+      const args = (output.args ?? {}) as Record<string, unknown>;
+      applyRelaySessionDefaults(tool, args, sessionID);
+      output.args = args;
+    },
+    "tool.execute.after": async ({ tool }, _output) => {
+      if (!getRelayToolSuffix(tool)) {
+        return;
+      }
 
-          return JSON.stringify({
-            roomCode: room.roomCode,
-            roomKind: room.kind,
-            members: state.runtime.listRoomMembers(room.roomCode)
-          }, null, 2);
-        }
-      }),
-      relay_room_set_role: tool({
-        description: "Set the role of a room member; only the room owner may do this",
-        args: {
-          targetSessionID: tool.schema.string().min(1),
-          role: tool.schema.string().min(1)
-        },
-        execute: async ({ targetSessionID, role }, context) => {
-          const room = state.runtime.roomStore.getRoomBySession(context.sessionID);
-          if (!room) {
-            throw new Error(`No relay room is bound to session ${context.sessionID}.`);
-          }
-
-          const normalizedRole = role === "observer" ? "observer" : role === "owner" ? "owner" : "member";
-          const updated = state.runtime.setRoomMemberRole(room.roomCode, context.sessionID, targetSessionID, normalizedRole);
-          return JSON.stringify(updated, null, 2);
-        }
-      }),
-      relay_thread_create: tool({
-        description: "Create a private or group durable thread inside the current relay room",
-        args: {
-          kind: tool.schema.string().min(1),
-          participantSessionIDs: tool.schema.string().min(1),
-          title: tool.schema.string().optional()
-        },
-        execute: async ({ kind, participantSessionIDs, title }, context) => {
-          const room = state.runtime.roomStore.getRoomBySession(context.sessionID);
-          if (!room) {
-            throw new Error(`No relay room is bound to session ${context.sessionID}.`);
-          }
-
-          const participants = parseParticipantSessionIDs(participantSessionIDs);
-          if (!participants.includes(context.sessionID)) {
-            participants.unshift(context.sessionID);
-          }
-
-          const thread = state.runtime.createThread({
-            roomCode: room.roomCode,
-            kind: kind === "group" ? "group" : "direct",
-            createdBySessionID: context.sessionID,
-            participantSessionIDs: participants,
-            title
-          });
-
-          return JSON.stringify(thread, null, 2);
-        }
-      }),
-      relay_thread_list: tool({
-        description: "List durable threads for the current relay room or session",
-        args: {
-          scope: tool.schema.string().optional()
-        },
-        execute: async ({ scope }, context) => {
-          const room = state.runtime.roomStore.getRoomBySession(context.sessionID);
-          if (scope === "room" && room) {
-            return JSON.stringify(state.runtime.listThreads({ roomCode: room.roomCode }), null, 2);
-          }
-          return JSON.stringify(state.runtime.listThreads({ sessionID: context.sessionID }), null, 2);
-        }
-      }),
-      relay_message_list: tool({
-        description: "List messages from a durable relay thread",
-        args: {
-          threadId: tool.schema.string().min(1),
-          afterSeq: tool.schema.number().int().nonnegative().optional(),
-          limit: tool.schema.number().int().positive().optional()
-        },
-        execute: async ({ threadId, afterSeq, limit }) => {
-          return JSON.stringify(state.runtime.listMessages(threadId, afterSeq, limit), null, 2);
-        }
-      }),
-      relay_message_send: tool({
-        description: "Append a durable message into a relay thread",
-        args: {
-          threadId: tool.schema.string().min(1),
-          message: tool.schema.string().min(1),
-          messageType: tool.schema.string().optional()
-        },
-        execute: async ({ threadId, message, messageType }, context) => {
-          const result = await state.runtime.sendThreadMessage({
-            threadId,
-            senderSessionID: context.sessionID,
-            message,
-            messageType
-          });
-          return JSON.stringify(result, null, 2);
-        }
-      }),
-      relay_message_mark_read: tool({
-        description: "Advance the read cursor for the current session in a thread",
-        args: {
-          threadId: tool.schema.string().min(1),
-          seq: tool.schema.number().int().nonnegative()
-        },
-        execute: async ({ threadId, seq }, context) => {
-          return JSON.stringify(state.runtime.markThreadRead(threadId, context.sessionID, seq), null, 2);
-        }
-      }),
-      relay_transcript_export: tool({
-        description: "Export the full durable transcript for a thread",
-        args: {
-          threadId: tool.schema.string().min(1)
-        },
-        execute: async ({ threadId }) => {
-          return JSON.stringify(state.runtime.exportTranscript(threadId), null, 2);
-        }
-      })
+      await state.runtime.flushPendingForKnownIdleSessions();
     },
     "experimental.session.compacting": async ({ sessionID }, output) => {
       output.context.push(...buildCompactionContext(state, sessionID));
