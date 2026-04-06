@@ -18,10 +18,10 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 ## Current architecture
 
 - **Public contract:** A2A over HTTP JSON-RPC and SSE
-- **Runtime shape:** plugin-first for session hooks and compaction, MCP-first for stable room/thread/message tool exposure
+- **Runtime shape:** plugin-first for session hooks, room operations, and session-aware delivery; standalone MCP is compatibility-only
 - **Delivery gate:** `session.status` is the primary scheduling signal
 - **Persistence:** local SQLite-backed task, audit, session-link, room, thread, and message state
-- **Operations surface:** a dedicated `relay` MCP server now exposes the durable collaboration tools, while plugin tools remain as a compatibility path
+- **Operations surface:** plugin relay tools are the primary operator surface; standalone MCP is compatibility-only and uses distinct `compat_*` tool names
 
 ## Implemented capabilities
 
@@ -44,11 +44,10 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 - Global OpenCode config now includes a local MCP server entry named `relay`
 - For OpenCode 1.3.6 local-path plugin compatibility, the installed plugin bundle uses `default export { id, server }`
 
-### Why MCP-first
-Long-lived sessions may expose MCP tools more reliably than plugin tools. For that reason, the preferred stable path is:
-1. `relay` MCP server for room/thread/message tools
-2. plugin hooks for session-aware argument injection and wake-up behavior
-3. plugin-room tools only as a compatibility fallback
+### Why plugin-first
+Normal room and message operations must go through the relay plugin tool surface so that session-aware injection and wake-up hooks actually run.
+The standalone MCP bridge remains available only for compatibility and manual storage-oriented operations, and now uses distinct `compat_*` tool names to avoid colliding with plugin relay tools.
+For normal session-aware relay usage, call only the plugin tools: `relay_room_*`, `relay_thread_*`, `relay_message_*`, and `relay_transcript_export`. Any `relay_compat_*` tool is compatibility-only and does not represent the standard auto-injection path.
 
 ### Private room flow (unchanged)
 1. Conversation A creates a room
@@ -104,9 +103,10 @@ corepack pnpm exec tsc -b --pretty false
 This repository was shaped by learning from the OhMyOpenCode / OMO plugin ecosystem, especially around how plugin capabilities, skills, and room-like workflows are surfaced inside OpenCode sessions.
 
 Key takeaways applied here:
-- plugin tools and MCP tools are different runtime surfaces and must not be conflated
+- plugin tools and standalone MCP tools are different runtime surfaces and must not be conflated
 - execution-oriented room workflows need stronger "tool first, then reply" behavior than a generic explanatory skill
 - local plugin compatibility for OpenCode 1.3.6 depends on the correct `default export { id, server }` shape
+- the relay plugin may expose either bare `relay_*` tool names or equivalent namespaced `mcp__relay__*` aliases; both belong to the plugin surface, not the standalone compatibility path
 
 ## Thanks
 
