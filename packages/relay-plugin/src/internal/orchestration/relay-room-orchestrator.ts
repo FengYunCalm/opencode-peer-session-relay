@@ -8,7 +8,14 @@ export type RelayNotificationDecision = {
 };
 
 export type RelayDeliveryHooks = {
+  recordDiagnostic?: (eventType: string, payload: Record<string, unknown>) => void;
   resolveNotificationDecision(sessionID: string): RelayNotificationDecision;
+  notifyPrivateRoomPeer(input: {
+    sourceSessionID: string;
+    peerSessionID: string;
+    roomCode: string;
+    message: string;
+  }): Promise<void>;
   notifyThreadParticipant(thread: RelayThread, sessionID: string, messages: RelayMessage[]): Promise<void>;
 };
 
@@ -214,6 +221,12 @@ export class RelayRoomOrchestrator {
 
   async sendRoomMessage(sourceSessionID: string, message: string, targetAlias?: string, roomCode?: string): Promise<SendRoomMessageResult> {
     const room = this.resolveRoomForSession(sourceSessionID, roomCode);
+    this.deliveryHooks?.recordDiagnostic?.("relay.send.route", {
+      roomCode: room.roomCode,
+      roomKind: room.kind,
+      sourceSessionID,
+      targetMode: room.kind === "group" ? (targetAlias ? "alias-direct" : "broadcast") : "paired-peer"
+    });
 
     const actor = this.roomStore.getMember(room.roomCode, sourceSessionID);
     if (!actor || actor.role === "observer") {
@@ -263,7 +276,13 @@ export class RelayRoomOrchestrator {
     }
 
     const thread = this.threadStore.ensureDirectThread(room.roomCode, [sourceSessionID, peerSessionID], sourceSessionID);
-    const result = await this.sendThreadMessage({ threadId: thread.threadId, senderSessionID: sourceSessionID, message, messageType: "relay" });
+    const result = await this.sendPrivateRoomMessage({
+      roomCode: room.roomCode,
+      threadId: thread.threadId,
+      sourceSessionID,
+      peerSessionID,
+      message
+    });
 
     return {
       peerSessionID,
@@ -273,6 +292,66 @@ export class RelayRoomOrchestrator {
       reason: result.queuedRecipients.find((entry) => entry.sessionID === peerSessionID)?.reason,
       notifiedRecipients: result.notifiedRecipients,
       queuedRecipients: result.queuedRecipients
+    };
+  }
+
+  private async sendPrivateRoomMessage(input: {
+    roomCode: string;
+    threadId: string;
+    sourceSessionID: string;
+    peerSessionID: string;
+    message: string;
+  }): Promise<SendThreadMessageResult> {
+    const message = this.messageStore.appendMessage({
+      threadId: input.threadId,
+      senderSessionID: input.sourceSessionID,
+      messageType: "relay",
+      body: { text: input.message }
+    });
+    this.threadStore.touchThread(input.threadId);
+    this.threadStore.markRead(input.threadId, input.sourceSessionID, message.seq);
+    this.threadStore.markNotified(input.threadId, input.sourceSessionID, message.seq);
+
+    const queuedRecipients: Array<{ sessionID: string; reason: string }> = [];
+    const notifiedRecipients: string[] = [];
+    const decision = this.deliveryHooks
+      ? this.deliveryHooks.resolveNotificationDecision(input.peerSessionID)
+      : { allowed: false, reason: standaloneDeliveryReason };
+    this.deliveryHooks?.recordDiagnostic?.("relay.send.decision", {
+      deliveryPath: "private-direct-hook",
+      roomCode: input.roomCode,
+      threadId: input.threadId,
+      sourceSessionID: input.sourceSessionID,
+      recipientSessionID: input.peerSessionID,
+      allowed: decision.allowed,
+      reason: decision.reason
+    });
+
+    if (!decision.allowed) {
+      queuedRecipients.push({ sessionID: input.peerSessionID, reason: decision.reason });
+    } else {
+      try {
+        await this.deliveryHooks!.notifyPrivateRoomPeer({
+          sourceSessionID: input.sourceSessionID,
+          peerSessionID: input.peerSessionID,
+          roomCode: input.roomCode,
+          message: input.message
+        });
+        this.threadStore.markNotified(input.threadId, input.peerSessionID, message.seq);
+        notifiedRecipients.push(input.peerSessionID);
+      } catch (error) {
+        queuedRecipients.push({
+          sessionID: input.peerSessionID,
+          reason: `live delivery failed: ${error instanceof Error ? error.message : "unknown error"}`
+        });
+      }
+    }
+
+    return {
+      threadId: input.threadId,
+      seq: message.seq,
+      notifiedRecipients,
+      queuedRecipients
     };
   }
 
@@ -297,6 +376,32 @@ export class RelayRoomOrchestrator {
       throw new Error(`Session ${input.senderSessionID} is not allowed to send messages in thread ${input.threadId}.`);
     }
 
+    const room = this.roomStore.getRoom(thread.roomCode);
+    if (room?.kind === "private" && thread.kind === "direct") {
+      this.deliveryHooks?.recordDiagnostic?.("relay.send.route", {
+        roomCode: thread.roomCode,
+        roomKind: room.kind,
+        threadId: input.threadId,
+        threadKind: thread.kind,
+        sourceSessionID: input.senderSessionID,
+        deliveryPath: "private-direct-hook"
+      });
+      const peerParticipant = this.threadStore
+        .listParticipants(input.threadId)
+        .find((participant) => participant.sessionID !== input.senderSessionID);
+      if (!peerParticipant) {
+        throw new Error(`Private thread ${input.threadId} does not have a writable peer participant.`);
+      }
+
+      return this.sendPrivateRoomMessage({
+        roomCode: thread.roomCode,
+        threadId: input.threadId,
+        sourceSessionID: input.senderSessionID,
+        peerSessionID: peerParticipant.sessionID,
+        message: input.message
+      });
+    }
+
     const message = this.messageStore.appendMessage({
       threadId: input.threadId,
       senderSessionID: input.senderSessionID,
@@ -309,12 +414,31 @@ export class RelayRoomOrchestrator {
 
     const queuedRecipients: Array<{ sessionID: string; reason: string }> = [];
     const notifiedRecipients: string[] = [];
+    this.deliveryHooks?.recordDiagnostic?.("relay.send.route", {
+      roomCode: thread.roomCode,
+      roomKind: room?.kind,
+      threadId: input.threadId,
+      threadKind: thread.kind,
+      sourceSessionID: input.senderSessionID,
+      deliveryPath: "thread-notify-loop"
+    });
     for (const participant of this.threadStore.listParticipants(input.threadId)) {
       if (participant.sessionID === input.senderSessionID) continue;
 
       const decision = this.deliveryHooks
         ? this.deliveryHooks.resolveNotificationDecision(participant.sessionID)
         : { allowed: false, reason: standaloneDeliveryReason };
+      this.deliveryHooks?.recordDiagnostic?.("relay.send.decision", {
+        deliveryPath: "thread-notify-loop",
+        roomCode: thread.roomCode,
+        roomKind: room?.kind,
+        threadId: input.threadId,
+        threadKind: thread.kind,
+        sourceSessionID: input.senderSessionID,
+        recipientSessionID: participant.sessionID,
+        allowed: decision.allowed,
+        reason: decision.reason
+      });
       if (!decision.allowed) {
         queuedRecipients.push({ sessionID: participant.sessionID, reason: decision.reason });
         continue;

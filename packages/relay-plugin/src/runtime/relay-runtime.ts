@@ -95,6 +95,7 @@ function sanitizePublicTask(task: Task | StoredRelayTask | null): JsonValue {
 }
 
 export class RelayRuntime {
+  static readonly diagnosticsTaskId = "__relay_diagnostics__";
   readonly taskStore: TaskStore;
   readonly auditStore: AuditStore;
   readonly sessionLinkStore: SessionLinkStore;
@@ -130,7 +131,9 @@ export class RelayRuntime {
     this.injector = new SessionInjector(input.client);
     this.observer = new ResponseObserver(this.taskStore, this.auditStore, this.sessionLinkStore, this.eventHub);
     this.relayOrchestrator = new RelayRoomOrchestrator(this.roomStore, this.threadStore, this.messageStore, {
+      recordDiagnostic: (eventType, payload) => this.recordDiagnostic(eventType, payload),
       resolveNotificationDecision: (sessionID) => this.resolveNotificationDecision(sessionID),
+      notifyPrivateRoomPeer: ({ sourceSessionID, peerSessionID, roomCode, message }) => this.notifyPrivateRoomPeer(sourceSessionID, peerSessionID, roomCode, message),
       notifyThreadParticipant: (thread, sessionID, messages) => this.notifyThreadParticipant(thread, sessionID, messages)
     });
 
@@ -273,14 +276,20 @@ export class RelayRuntime {
 
   async flushPendingForKnownIdleSessions(): Promise<boolean> {
     let notified = false;
-    for (const session of this.sessionRegistry.entries()) {
-      if (session.status?.type !== "idle" || this.humanGuard.isPaused(session.sessionID)) {
+    for (const sessionID of this.roomStore.listActiveSessionIDs()) {
+      const decision = this.resolveNotificationDecision(sessionID);
+      if (!decision.allowed) {
         continue;
       }
-      const flushed = await this.notifyPendingMessages(session.sessionID);
+
+      const flushed = await this.notifyPendingMessages(sessionID);
       notified = notified || flushed;
     }
     return notified;
+  }
+
+  recordDiagnostic(eventType: string, payload: Record<string, unknown>): void {
+    this.auditStore.append(RelayRuntime.diagnosticsTaskId, eventType, payload);
   }
 
   async replayTask(taskId: string): Promise<StoredRelayTask | undefined> {
@@ -380,6 +389,12 @@ export class RelayRuntime {
         content
       });
       await this.injector.submitAsync(sessionID, prompt);
+      this.recordDiagnostic("relay.send.inject", {
+        injectorKind: "task-dispatch",
+        taskId: task.taskId,
+        targetSessionID: sessionID,
+        result: "ok"
+      });
       this.observer.accept(task.taskId, sessionID);
       this.auditStore.append(task.taskId, "task.dispatched", { sessionID });
       return { sessionID };
@@ -455,6 +470,7 @@ export class RelayRuntime {
   }
 
   private async notifyThreadParticipant(thread: RelayThread, sessionID: string, messages: RelayMessage[]): Promise<void> {
+    const roomKind = this.roomStore.getRoom(thread.roomCode)?.kind;
     const senderRoles = Object.fromEntries(
       messages.map((message) => [message.senderSessionID, this.roomStore.getMember(thread.roomCode, message.senderSessionID)?.role as RelayRoomMemberRole | undefined])
     );
@@ -465,12 +481,39 @@ export class RelayRuntime {
     const prompt = buildThreadRelayPrompt({
       roomCode: thread.roomCode,
       thread,
+      roomKind,
       recipientSessionID: sessionID,
       messages,
       senderRoles,
       senderAliases
     });
     await this.injector.submitAsync(sessionID, prompt);
+    this.recordDiagnostic("relay.send.inject", {
+      injectorKind: "thread-notify",
+      roomCode: thread.roomCode,
+      threadId: thread.threadId,
+      targetSessionID: sessionID,
+      result: "ok"
+    });
+  }
+
+  private async notifyPrivateRoomPeer(sourceSessionID: string, peerSessionID: string, roomCode: string, message: string): Promise<void> {
+    const prompt = [
+      "[RELAYED AGENT INPUT]",
+      `Sender: paired agent session ${sourceSessionID} (not a human user)`,
+      `Room: ${roomCode}`,
+      "Response mode: use tools/workflow actions, not end-user chat replies",
+      "Message:",
+      message
+    ].join("\n\n");
+    await this.injector.submitAsync(peerSessionID, prompt);
+    this.recordDiagnostic("relay.send.inject", {
+      injectorKind: "private-room-peer",
+      roomCode,
+      sourceSessionID,
+      targetSessionID: peerSessionID,
+      result: "ok"
+    });
   }
 
   private async *streamTaskEvents(id: JsonRpcId, task: Task, events: AsyncIterable<TaskEvent>): AsyncIterable<JsonValue> {

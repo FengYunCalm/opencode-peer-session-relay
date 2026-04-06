@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MessageStore,
@@ -98,6 +98,9 @@ describe("relay room orchestration", () => {
     const messageStore = new MessageStore(location);
     const orchestrator = new RelayRoomOrchestrator(roomStore, threadStore, messageStore, {
       resolveNotificationDecision: () => ({ allowed: true, reason: "idle" }),
+      notifyPrivateRoomPeer: async () => {
+        throw new Error("prompt failed");
+      },
       notifyThreadParticipant: async () => {
         throw new Error("prompt failed");
       }
@@ -115,6 +118,83 @@ describe("relay room orchestration", () => {
       }
     ]);
     expect(orchestrator.listMessages(result.threadId)).toHaveLength(1);
+
+    roomStore.close();
+    threadStore.close();
+    messageStore.close();
+  });
+
+  it("uses the private-room direct delivery hook instead of thread notifications", async () => {
+    const location = createTestDatabaseLocation("relay-orchestrator-private-direct-hook");
+    dbLocations.push(location);
+
+    const roomStore = new RoomStore(location);
+    const threadStore = new ThreadStore(location);
+    const messageStore = new MessageStore(location);
+    const notifyPrivateRoomPeer = vi.fn().mockResolvedValue(undefined);
+    const notifyThreadParticipant = vi.fn().mockResolvedValue(undefined);
+    const orchestrator = new RelayRoomOrchestrator(roomStore, threadStore, messageStore, {
+      resolveNotificationDecision: () => ({ allowed: true, reason: "idle" }),
+      notifyPrivateRoomPeer,
+      notifyThreadParticipant
+    });
+
+    const room = orchestrator.createRoom("session-owner", "private");
+    orchestrator.joinRoom(room.roomCode, "session-peer");
+
+    await orchestrator.sendRoomMessage("session-owner", "hello direct path", undefined, room.roomCode);
+
+    expect(notifyPrivateRoomPeer).toHaveBeenCalledWith({
+      sourceSessionID: "session-owner",
+      peerSessionID: "session-peer",
+      roomCode: room.roomCode,
+      message: "hello direct path"
+    });
+    expect(notifyThreadParticipant).not.toHaveBeenCalled();
+
+    roomStore.close();
+    threadStore.close();
+    messageStore.close();
+  });
+
+  it("uses the private-room direct delivery hook for direct thread sends too", async () => {
+    const location = createTestDatabaseLocation("relay-orchestrator-private-thread-direct-hook");
+    dbLocations.push(location);
+
+    const roomStore = new RoomStore(location);
+    const threadStore = new ThreadStore(location);
+    const messageStore = new MessageStore(location);
+    const notifyPrivateRoomPeer = vi.fn().mockResolvedValue(undefined);
+    const notifyThreadParticipant = vi.fn().mockResolvedValue(undefined);
+    const orchestrator = new RelayRoomOrchestrator(roomStore, threadStore, messageStore, {
+      resolveNotificationDecision: () => ({ allowed: true, reason: "idle" }),
+      notifyPrivateRoomPeer,
+      notifyThreadParticipant
+    });
+
+    const room = orchestrator.createRoom("session-owner", "private");
+    orchestrator.joinRoom(room.roomCode, "session-peer");
+    const thread = orchestrator.createThread({
+      roomCode: room.roomCode,
+      kind: "direct",
+      createdBySessionID: "session-owner",
+      participantSessionIDs: ["session-owner", "session-peer"]
+    });
+
+    await orchestrator.sendThreadMessage({
+      threadId: thread.threadId,
+      senderSessionID: "session-owner",
+      message: "hello direct thread path",
+      messageType: "relay"
+    });
+
+    expect(notifyPrivateRoomPeer).toHaveBeenCalledWith({
+      sourceSessionID: "session-owner",
+      peerSessionID: "session-peer",
+      roomCode: room.roomCode,
+      message: "hello direct thread path"
+    });
+    expect(notifyThreadParticipant).not.toHaveBeenCalled();
 
     roomStore.close();
     threadStore.close();

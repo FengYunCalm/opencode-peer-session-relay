@@ -229,6 +229,14 @@ export class RoomStore {
     return this.listMembers(roomCode).map((member) => member.sessionID);
   }
 
+  listActiveSessionIDs(): string[] {
+    const rows = this.database
+      .prepare(`SELECT DISTINCT session_id FROM relay_room_members WHERE membership_status = 'active' ORDER BY session_id ASC`)
+      .all() as Array<{ session_id: string }>;
+
+    return rows.map((row) => row.session_id);
+  }
+
   areSessionsPaired(sourceSessionID: string, targetSessionID: string): boolean {
     const sourceRoom = this.getRoomBySession(sourceSessionID);
     if (!sourceRoom || sourceRoom.status !== "active") {

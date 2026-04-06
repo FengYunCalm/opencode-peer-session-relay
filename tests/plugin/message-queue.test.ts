@@ -111,4 +111,43 @@ describe("durable room message queue", () => {
     const participant = state.runtime.threadStore.getParticipant(thread.threadId, "session-a");
     expect(participant?.lastNotifiedSeq).toBe(1);
   });
+
+  it("flushes pending thread messages for active recipients even when their session status is still unknown", async () => {
+    const databasePath = createTestDatabaseLocation("message-queue-unknown-status-flush");
+    dbLocations.push(databasePath);
+    const promptAsync = vi.fn().mockResolvedValue({ data: true });
+    const hooks = await RelayPlugin(createPluginInput("project-message-queue-unknown-status", promptAsync), {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const state = getRelayPluginStateForTest("project-message-queue-unknown-status")!;
+    const room = state.runtime.roomStore.createRoom("session-owner", "group");
+    state.runtime.roomStore.joinRoom(room.roomCode, "session-a", "alpha");
+    const thread = state.runtime.createThread({
+      roomCode: room.roomCode,
+      kind: "group",
+      createdBySessionID: "session-owner",
+      participantSessionIDs: ["session-owner", "session-a"],
+      title: "team"
+    });
+
+    await state.runtime.sendThreadMessage({ threadId: thread.threadId, senderSessionID: "session-owner", message: "hello unknown status", messageType: "relay" });
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    promptAsync.mockClear();
+    state.runtime.messageStore.appendMessage({
+      threadId: thread.threadId,
+      senderSessionID: "session-owner",
+      messageType: "relay",
+      body: { text: "queued for flush" }
+    });
+
+    await hooks["tool.execute.after"]?.({ tool: "mcp__relay__message_send", sessionID: "session-owner", callID: "call-after", args: {} }, { title: "done", output: "ok", metadata: {} });
+
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const participant = state.runtime.threadStore.getParticipant(thread.threadId, "session-a");
+    expect(participant?.lastNotifiedSeq).toBe(2);
+  });
 });

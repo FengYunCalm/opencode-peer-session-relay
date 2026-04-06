@@ -3,10 +3,10 @@ import { tool } from "@opencode-ai/plugin";
 import type { Event } from "@opencode-ai/sdk";
 
 import { A2ARelayHost } from "./a2a/host.js";
-import { resolveRelayPluginConfig } from "./config.js";
+import { buildRelayPluginInstanceKey, resolveRelayPluginConfig } from "./config.js";
 import { buildCompactionContext } from "./runtime/compaction-anchor.js";
 import { createRelayPluginState, type RelayPluginState } from "./runtime/plugin-state.js";
-import { readRelayPluginState, registerRelayPluginState } from "./runtime/plugin-instance-registry.js";
+import { deleteRelayPluginStartup, readRelayPluginStartup, readRelayPluginState, registerRelayPluginStartup, registerRelayPluginState, registerRelayProjectInstance } from "./runtime/plugin-instance-registry.js";
 import { RelayRuntime } from "./runtime/relay-runtime.js";
 import { isRelayCurrentSessionPlaceholder, shouldInjectRelaySessionID } from "./session-id.js";
 import { SessionRegistry } from "./runtime/session-registry.js";
@@ -95,28 +95,46 @@ function applyRelaySessionDefaults(toolID: string, args: Record<string, unknown>
 export const RelayPlugin: Plugin = async (input, options) => {
   const config = resolveRelayPluginConfig(options);
   const projectKey = input.project.id;
+  const instanceKey = buildRelayPluginInstanceKey(config);
 
-  let state: RelayPluginState | undefined = readRelayPluginState(projectKey);
+  let state: RelayPluginState | undefined = readRelayPluginState(instanceKey);
 
   if (!state) {
-    const sessionRegistry = new SessionRegistry();
-    const runtime = new RelayRuntime(input, config, sessionRegistry);
-    let host: A2ARelayHost;
-    host = new A2ARelayHost(config.a2a, {
-      readiness: () => ({ ok: true, detail: "relay plugin runtime booted" }),
-      health: () => ({
-        projectID: projectKey,
-        startedAt: new Date().toISOString(),
-        activeTaskCount: runtime.taskStore.listActiveTasks().length
-      }),
-      agentCard: () => runtime.buildAgentCard(host.url),
-      rpc: async (payload) => runtime.handleJsonRpc(payload)
-    });
+    const existingStartup = readRelayPluginStartup(instanceKey);
+    if (existingStartup) {
+      state = await existingStartup;
+    } else {
+      const startup = (async () => {
+        const sessionRegistry = new SessionRegistry();
+        const runtime = new RelayRuntime(input, config, sessionRegistry);
+        let host: A2ARelayHost;
+        host = new A2ARelayHost(config.a2a, {
+          readiness: () => ({ ok: true, detail: "relay plugin runtime booted" }),
+          health: () => ({
+            projectID: projectKey,
+            startedAt: new Date().toISOString(),
+            activeTaskCount: runtime.taskStore.listActiveTasks().length
+          }),
+          agentCard: () => runtime.buildAgentCard(host.url),
+          rpc: async (payload) => runtime.handleJsonRpc(payload)
+        });
 
-    await host.start();
-    state = createRelayPluginState(config, host, runtime);
-    registerRelayPluginState(projectKey, state);
+        await host.start();
+        const nextState = createRelayPluginState(config, host, runtime);
+        registerRelayPluginState(instanceKey, nextState);
+        return nextState;
+      })();
+
+      registerRelayPluginStartup(instanceKey, startup);
+      try {
+        state = await startup;
+      } finally {
+        deleteRelayPluginStartup(instanceKey);
+      }
+    }
   }
+
+  registerRelayProjectInstance(projectKey, instanceKey);
 
   const relayTools = {
     relay_room_create: tool({
@@ -180,6 +198,13 @@ export const RelayPlugin: Plugin = async (input, options) => {
         targetAlias: tool.schema.string().optional()
       },
       execute: async ({ roomCode, message, targetAlias }, context) => {
+        state.runtime.recordDiagnostic("relay.send.entry", {
+          surface: "plugin",
+          tool: "relay_room_send",
+          sessionID: context.sessionID,
+          roomCode: roomCode ?? null,
+          targetAlias: targetAlias ?? null
+        });
         const result = await state.runtime.sendRoomMessage(context.sessionID, message, targetAlias, roomCode);
         return [
           `Sent to peer session: ${result.peerSessionID}`,
@@ -278,6 +303,13 @@ export const RelayPlugin: Plugin = async (input, options) => {
         messageType: tool.schema.string().optional()
       },
       execute: async ({ threadId, message, messageType }, context) => {
+        state.runtime.recordDiagnostic("relay.send.entry", {
+          surface: "plugin",
+          tool: "relay_message_send",
+          sessionID: context.sessionID,
+          threadId,
+          messageType: messageType ?? "relay"
+        });
         const result = await state.runtime.sendThreadMessage({
           threadId,
           senderSessionID: context.sessionID,
