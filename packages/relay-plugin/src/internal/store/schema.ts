@@ -84,10 +84,41 @@ export function initializeRelaySchema(database: SqliteDatabase): void {
       UNIQUE (thread_id, message_id)
     );
 
+    CREATE TABLE IF NOT EXISTS relay_team_runs (
+      run_id TEXT PRIMARY KEY,
+      manager_session_id TEXT NOT NULL,
+      room_code TEXT NOT NULL UNIQUE,
+      task TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS relay_team_workers (
+      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      alias TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      last_note TEXT,
+      workflow_source TEXT,
+      workflow_phase TEXT,
+      progress INTEGER,
+      evidence_json TEXT,
+      created_at INTEGER NOT NULL,
+      joined_at INTEGER,
+      ready_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (run_id, session_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_relay_room_members_session ON relay_room_members(session_id);
     CREATE INDEX IF NOT EXISTS idx_relay_threads_room ON relay_threads(room_code);
     CREATE INDEX IF NOT EXISTS idx_relay_thread_participants_session ON relay_thread_participants(session_id);
     CREATE INDEX IF NOT EXISTS idx_relay_messages_thread_seq ON relay_messages(thread_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_relay_team_runs_manager ON relay_team_runs(manager_session_id);
+    CREATE INDEX IF NOT EXISTS idx_relay_team_workers_session ON relay_team_workers(session_id);
   `);
 
   try {
@@ -96,5 +127,21 @@ export function initializeRelaySchema(database: SqliteDatabase): void {
 
   try {
     database.exec(`ALTER TABLE relay_room_members ADD COLUMN alias TEXT;`);
+  } catch {}
+
+  try {
+    database.exec(`ALTER TABLE relay_team_workers ADD COLUMN workflow_source TEXT;`);
+  } catch {}
+
+  try {
+    database.exec(`ALTER TABLE relay_team_workers ADD COLUMN workflow_phase TEXT;`);
+  } catch {}
+
+  try {
+    database.exec(`ALTER TABLE relay_team_workers ADD COLUMN progress INTEGER;`);
+  } catch {}
+
+  try {
+    database.exec(`ALTER TABLE relay_team_workers ADD COLUMN evidence_json TEXT;`);
   } catch {}
 }

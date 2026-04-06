@@ -13,6 +13,7 @@ const a2aConfigSchema = z.object({
 
 const runtimeConfigSchema = z.object({
   compactionContextLimit: z.number().int().positive().default(20),
+  teamWorkerStaleAfterMs: z.number().int().positive().default(300000),
   injectViaNoReply: z.boolean().default(true),
   databasePath: z.string().min(1).optional()
 });

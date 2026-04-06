@@ -15,12 +15,13 @@ import { mapTaskStatusEvent, TaskEventHub } from "../a2a/mapper/outbound-events.
 import type { A2AHostResponse, JsonValue } from "../a2a/host.js";
 import type { RelayPluginConfig } from "../config.js";
 import { createRelayOpsMcpServer, type RelayOpsMcp } from "../internal/mcp/server.js";
-import { AuditStore } from "../internal/store/audit-store.js";
+import { AuditStore, type AuditEventRecord } from "../internal/store/audit-store.js";
 import { MessageStore, type RelayMessage } from "../internal/store/message-store.js";
 import { RelayRoomOrchestrator } from "../internal/orchestration/relay-room-orchestrator.js";
 import { RoomStore, type RelayRoom, type RelayRoomKind, type RelayRoomMemberRole } from "../internal/store/room-store.js";
 import { SessionLinkStore } from "../internal/store/session-link-store.js";
 import { TaskStore, type StoredRelayTask } from "../internal/store/task-store.js";
+import { TeamStore, type RelayTeamRun, type RelayTeamRunStatus, type RelayTeamWorker } from "../internal/store/team-store.js";
 import { ThreadStore, type RelayThread } from "../internal/store/thread-store.js";
 import { buildTaskRelayPrompt, buildThreadRelayPrompt } from "./prompt-preamble.js";
 import { evaluateDelivery } from "./delivery-gate.js";
@@ -30,6 +31,39 @@ import { LoopGuard } from "./loop-guard.js";
 import { ResponseObserver } from "./response-observer.js";
 import type { SessionRegistry } from "./session-registry.js";
 import { isRelayPairAllowed } from "../config.js";
+import { classifyRelayWorkflowSignal } from "./team-workflow.js";
+
+type TeamStatusSummary = {
+  counts: Record<string, number>;
+  healthCounts: Record<string, number>;
+};
+
+export type RelayTeamWorkerHealth = "active" | "stale" | "paused" | "unknown" | "settled";
+
+export type RelayTeamWorkerView = RelayTeamWorker & {
+  health: RelayTeamWorkerHealth;
+  stale: boolean;
+  sessionStatus?: SessionStatus["type"];
+  sessionUpdatedAt?: number;
+};
+
+export type RelayTeamStatusView = {
+  runId: string;
+  roomCode: string;
+  task: string;
+  status: RelayTeamRunStatus;
+  managerSessionID: string;
+  currentSessionRole: string;
+  workers: RelayTeamWorkerView[];
+  summary: TeamStatusSummary;
+  recentEvents: Array<{
+    id: number;
+    eventType: string;
+    payload: Record<string, unknown>;
+    createdAt: number;
+  }>;
+  nextStep: string;
+};
 
 function jsonRpcSuccess(id: JsonRpcId, result: JsonValue): JsonValue {
   return { jsonrpc: "2.0", id, result };
@@ -102,6 +136,7 @@ export class RelayRuntime {
   readonly roomStore: RoomStore;
   readonly threadStore: ThreadStore;
   readonly messageStore: MessageStore;
+  readonly teamStore: TeamStore;
   readonly eventHub = new TaskEventHub();
   readonly humanGuard = new HumanGuard();
   readonly loopGuard = new LoopGuard();
@@ -128,6 +163,7 @@ export class RelayRuntime {
     this.roomStore = new RoomStore(databasePath);
     this.threadStore = new ThreadStore(databasePath);
     this.messageStore = new MessageStore(databasePath);
+    this.teamStore = new TeamStore(databasePath);
     this.injector = new SessionInjector(input.client);
     this.observer = new ResponseObserver(this.taskStore, this.auditStore, this.sessionLinkStore, this.eventHub);
     this.relayOrchestrator = new RelayRoomOrchestrator(this.roomStore, this.threadStore, this.messageStore, {
@@ -162,6 +198,7 @@ export class RelayRuntime {
     this.roomStore.close();
     this.threadStore.close();
     this.messageStore.close();
+    this.teamStore.close();
     this.sessionLinkStore.close();
   }
 
@@ -232,7 +269,17 @@ export class RelayRuntime {
   }
 
   joinRoom(roomCode: string, sessionID: string, alias?: string): RelayRoom {
-    return this.relayOrchestrator.joinRoom(roomCode, sessionID, alias);
+    const room = this.relayOrchestrator.joinRoom(roomCode, sessionID, alias);
+    const worker = this.teamStore.markWorkerJoined(sessionID, room.roomCode, alias);
+    if (worker) {
+      this.auditStore.append(worker.runId, "team.worker.joined", {
+        sessionID,
+        alias: worker.alias,
+        role: worker.role,
+        roomCode: room.roomCode
+      });
+    }
+    return room;
   }
 
   async onSessionStatus(sessionID: string, status: SessionStatus): Promise<void> {
@@ -271,7 +318,89 @@ export class RelayRuntime {
     accepted: boolean;
     reason?: string;
   }> {
-    return this.relayOrchestrator.sendRoomMessage(sourceSessionID, message, targetAlias, roomCode);
+    const result = await this.relayOrchestrator.sendRoomMessage(sourceSessionID, message, targetAlias, roomCode);
+    const signal = classifyRelayWorkflowSignal(message);
+    if (signal.matched) {
+      const worker = this.teamStore.markWorkerSignal(sourceSessionID, result.roomCode, signal);
+      if (worker) {
+        this.auditStore.append(worker.runId, `team.worker.${signal.status}`, {
+          sessionID: sourceSessionID,
+          role: worker.role,
+          alias: worker.alias,
+          roomCode: result.roomCode,
+          note: signal.note,
+          source: signal.source,
+          phase: signal.phase,
+          progress: signal.progress,
+          evidence: signal.evidence,
+          metadata: signal.metadata ?? {}
+        });
+      }
+    }
+    return result;
+  }
+
+  getTeamStatus(sessionID: string, runId?: string, roomCode?: string): RelayTeamStatusView {
+    const run = this.teamStore.getRunForSession(sessionID, roomCode, runId);
+    if (!run) {
+      throw new Error(`No relay workflow team is bound to session ${sessionID}.`);
+    }
+
+    const workers = this.teamStore.listWorkers(run.runId).map((worker) => this.decorateTeamWorker(worker));
+    const currentWorker = workers.find((worker) => worker.sessionID === sessionID);
+    const counts = workers.reduce<Record<string, number>>((acc, worker) => {
+      acc[worker.status] = (acc[worker.status] ?? 0) + 1;
+      return acc;
+    }, {});
+    const healthCounts = workers.reduce<Record<string, number>>((acc, worker) => {
+      acc[worker.health] = (acc[worker.health] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    return {
+      runId: run.runId,
+      roomCode: run.roomCode,
+      task: run.task,
+      status: run.status,
+      managerSessionID: run.managerSessionID,
+      currentSessionRole: currentWorker?.role ?? "manager",
+      workers,
+      summary: { counts, healthCounts },
+      recentEvents: this.listRecentTeamEvents(run.runId, 12),
+      nextStep: this.buildTeamNextStep(run, workers)
+    };
+  }
+
+  buildTeamCompactionContext(sessionID: string, limit: number): string[] {
+    const run = this.teamStore.getRunForSession(sessionID);
+    if (!run) {
+      return [];
+    }
+
+    const workers = this.teamStore.listWorkers(run.runId).slice(0, limit);
+    const currentWorker = workers.find((worker) => worker.sessionID === sessionID);
+    return [
+      "## Team Workflow",
+      `Run: ${run.runId}`,
+      `Role: ${currentWorker?.role ?? "manager"}`,
+      `Room: ${run.roomCode}`,
+      `Task: ${run.task}`,
+      `Status: ${run.status}`,
+      `Recent: ${this.listRecentTeamEvents(run.runId, 3).map((event) => `${event.eventType}:${typeof event.payload.note === "string" ? event.payload.note : ""}`.trim()).join(" | ") || "none"}`,
+      `Workers: ${workers.length === 0 ? "none" : workers.map((worker) => {
+        const decorated = this.decorateTeamWorker(worker);
+        const parts = [
+          `${decorated.role}/${decorated.alias}`,
+          decorated.status,
+          `health=${decorated.health}`,
+          decorated.workflowSource ? `source=${decorated.workflowSource}` : undefined,
+          decorated.workflowPhase ? `phase=${decorated.workflowPhase}` : undefined,
+          decorated.progress !== undefined ? `progress=${decorated.progress}` : undefined,
+          decorated.lastNote ? `note=${decorated.lastNote}` : undefined
+        ].filter(Boolean);
+        return `- ${parts.join(" ")}`;
+      }).join("; ")}`
+    ];
   }
 
   async flushPendingForKnownIdleSessions(): Promise<boolean> {
@@ -521,5 +650,67 @@ export class RelayRuntime {
     for await (const event of events) {
       yield { jsonrpc: "2.0", method: "task.event", params: event } as JsonValue;
     }
+  }
+
+  private buildTeamNextStep(run: RelayTeamRun, workers: RelayTeamWorkerView[]): string {
+    if (run.status === "failed") {
+      return "Inspect failed worker notes and decide whether to restart the workflow team.";
+    }
+    if (run.status === "blocked") {
+      return "Inspect blocker notes, unblock the blocked role, and continue coordination through relay room messages.";
+    }
+    if (run.status === "completed") {
+      return "Review the worker completion messages and export the transcript if you need a durable record.";
+    }
+    if (run.status === "ready") {
+      return "The team is assembled and ready. Assign or confirm the next concrete slice of work through relay_room_send or durable relay threads.";
+    }
+    if (run.status === "in_progress") {
+      return "Work is in progress. Monitor relay_team_status for blocker, completion, and health changes before redirecting the team.";
+    }
+
+    const staleWorkers = workers.filter((worker) => worker.health === "stale");
+    if (staleWorkers.length > 0) {
+      return `These workers look stale and may need intervention: ${staleWorkers.map((worker) => worker.alias).join(", ")}.`;
+    }
+
+    const waitingWorkers = workers.filter((worker) => ["created", "bootstrapped", "joined"].includes(worker.status));
+    if (waitingWorkers.length > 0) {
+      return `Wait for remaining workers to join the room and send ${"[TEAM_READY]"} messages: ${waitingWorkers.map((worker) => worker.alias).join(", ")}.`;
+    }
+    return "Workflow bootstrap is still in progress.";
+  }
+
+  private listRecentTeamEvents(runId: string, limit: number): AuditEventRecord[] {
+    return this.auditStore.list(runId).slice(-limit);
+  }
+
+  private decorateTeamWorker(worker: RelayTeamWorker): RelayTeamWorkerView {
+    const sessionSnapshot = this.sessionRegistry.get(worker.sessionID);
+    const now = Date.now();
+    const latestActivityAt = Math.max(worker.updatedAt, sessionSnapshot?.updatedAt ?? 0);
+    const stale = !["completed", "failed"].includes(worker.status)
+      && now - latestActivityAt > this.config.runtime.teamWorkerStaleAfterMs;
+
+    let health: RelayTeamWorkerHealth;
+    if (["completed", "failed"].includes(worker.status)) {
+      health = "settled";
+    } else if (this.humanGuard.isPaused(worker.sessionID)) {
+      health = "paused";
+    } else if (stale) {
+      health = "stale";
+    } else if (sessionSnapshot?.status) {
+      health = "active";
+    } else {
+      health = "unknown";
+    }
+
+    return {
+      ...worker,
+      health,
+      stale,
+      sessionStatus: sessionSnapshot?.status?.type,
+      sessionUpdatedAt: sessionSnapshot?.updatedAt
+    };
   }
 }

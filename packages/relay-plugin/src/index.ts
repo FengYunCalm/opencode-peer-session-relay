@@ -8,6 +8,7 @@ import { buildCompactionContext } from "./runtime/compaction-anchor.js";
 import { createRelayPluginState, type RelayPluginState } from "./runtime/plugin-state.js";
 import { deleteRelayPluginStartup, readRelayPluginStartup, readRelayPluginState, registerRelayPluginStartup, registerRelayPluginState, registerRelayProjectInstance } from "./runtime/plugin-instance-registry.js";
 import { RelayRuntime } from "./runtime/relay-runtime.js";
+import { bootstrapRelayWorkflowTeam } from "./runtime/team-workflow.js";
 import { isRelayCurrentSessionPlaceholder, shouldInjectRelaySessionID } from "./session-id.js";
 import { SessionRegistry } from "./runtime/session-registry.js";
 
@@ -333,6 +334,21 @@ export const RelayPlugin: Plugin = async (input, options) => {
         threadId: tool.schema.string().min(1)
       },
       execute: async ({ threadId }) => JSON.stringify(state.runtime.exportTranscript(threadId), null, 2)
+    }),
+    relay_team_start: tool({
+      description: "Create a relay-backed workflow team from the current session and bootstrap the default worker sessions",
+      args: {
+        task: tool.schema.string().min(1)
+      },
+      execute: async ({ task }, context) => JSON.stringify(await bootstrapRelayWorkflowTeam(input, state.runtime, context.sessionID, task), null, 2)
+    }),
+    relay_team_status: tool({
+      description: "Show the current relay workflow team status for this session or a specific run/room",
+      args: {
+        runId: tool.schema.string().optional(),
+        roomCode: tool.schema.string().optional()
+      },
+      execute: async ({ runId, roomCode }, context) => JSON.stringify(state.runtime.getTeamStatus(context.sessionID, runId, roomCode), null, 2)
     })
   } as const;
 
@@ -348,7 +364,9 @@ export const RelayPlugin: Plugin = async (input, options) => {
     "mcp__relay__message_list": relayTools.relay_message_list,
     "mcp__relay__message_send": relayTools.relay_message_send,
     "mcp__relay__message_mark_read": relayTools.relay_message_mark_read,
-    "mcp__relay__transcript_export": relayTools.relay_transcript_export
+    "mcp__relay__transcript_export": relayTools.relay_transcript_export,
+    "mcp__relay__team_start": relayTools.relay_team_start,
+    "mcp__relay__team_status": relayTools.relay_team_status
   } as const;
 
   return {

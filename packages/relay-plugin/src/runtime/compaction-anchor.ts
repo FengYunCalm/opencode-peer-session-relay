@@ -4,11 +4,13 @@ export function buildCompactionContext(state: RelayPluginState, sessionID: strin
   const activeSessions = state.sessionRegistry
     .entries()
     .map((entry) => `- ${entry.sessionID}: ${entry.status?.type ?? "unknown"}`);
+  const teamContext = state.runtime.buildTeamCompactionContext(sessionID, state.config.runtime.compactionContextLimit);
 
   return [
     "## Relay Context",
     `Tracked session: ${sessionID}`,
     `A2A host: ${state.host.url ?? "not-started"}`,
-    `Known sessions: ${activeSessions.length === 0 ? "none" : activeSessions.join("; ")}`
+    `Known sessions: ${activeSessions.length === 0 ? "none" : activeSessions.join("; ")}`,
+    ...teamContext
   ];
 }
