@@ -62,7 +62,42 @@ export type RelayTeamStatusView = {
     payload: Record<string, unknown>;
     createdAt: number;
   }>;
+  attentionItems: Array<{
+    kind: "stale_worker" | "blocked_worker" | "rejected_signal" | "escalated_issue";
+    severity: "high" | "medium";
+    targetAlias?: string;
+    count?: number;
+    reason: string;
+    suggestedAction: RelayTeamInterventionAction;
+  }>;
+  interventionOutcomes: Array<{
+    action: RelayTeamInterventionAction;
+    targetAlias?: string;
+    handoffTo?: string;
+    status: "pending" | "acknowledged" | "resolved" | "still_problematic";
+    reason: string;
+    createdAt: number;
+  }>;
+  policyDecisions: RelayTeamPolicyDecision[];
+  recommendedActions: Array<{
+    action: RelayTeamInterventionAction;
+    targetAlias?: string;
+    handoffTo?: string;
+    reason: string;
+  }>;
   nextStep: string;
+};
+
+export type RelayTeamInterventionAction = "retry" | "reassign" | "unblock" | "nudge";
+
+type RelayTeamPolicyDecision = {
+  mode: "observe" | "manual_intervention" | "escalate";
+  action?: RelayTeamInterventionAction;
+  targetAlias?: string;
+  severity: "medium" | "high";
+  reason: string;
+  requiresExplicitApply: boolean;
+  sourceKind: string;
 };
 
 function jsonRpcSuccess(id: JsonRpcId, result: JsonValue): JsonValue {
@@ -320,7 +355,7 @@ export class RelayRuntime {
   }> {
     const result = await this.relayOrchestrator.sendRoomMessage(sourceSessionID, message, targetAlias, roomCode);
     const signal = classifyRelayWorkflowSignal(message);
-    if (signal.matched) {
+    if (signal.matched && signal.accepted) {
       const worker = this.teamStore.markWorkerSignal(sourceSessionID, result.roomCode, signal);
       if (worker) {
         this.auditStore.append(worker.runId, `team.worker.${signal.status}`, {
@@ -336,8 +371,167 @@ export class RelayRuntime {
           metadata: signal.metadata ?? {}
         });
       }
+    } else if (signal.matched) {
+      const run = this.teamStore.getRunForSession(sourceSessionID, result.roomCode);
+      if (run) {
+        const worker = this.teamStore.listWorkers(run.runId).find((entry) => entry.sessionID === sourceSessionID);
+        this.auditStore.append(run.runId, "team.worker.signal_rejected", {
+          sessionID: sourceSessionID,
+          role: worker?.role ?? "manager",
+          alias: worker?.alias,
+          roomCode: result.roomCode,
+          rawMessage: message,
+          rejectionReason: signal.rejectionReason ?? "invalid workflow signal"
+        });
+      }
     }
     return result;
+  }
+
+  async interveneTeam(
+    managerSessionID: string,
+    input: {
+      runId?: string;
+      roomCode?: string;
+      action: RelayTeamInterventionAction;
+      targetAlias?: string;
+      note: string;
+      handoffTo?: string;
+      deliverables?: string[];
+    }
+  ): Promise<{
+    runId: string;
+    roomCode: string;
+    action: RelayTeamInterventionAction;
+    targetAlias?: string;
+    handoffTo?: string;
+    accepted: boolean;
+    reason?: string;
+    threadId: string;
+    peerSessionID: string;
+  }> {
+    const run = this.teamStore.getRunForSession(managerSessionID, input.roomCode, input.runId);
+    if (!run) {
+      throw new Error(`No relay workflow team is bound to session ${managerSessionID}.`);
+    }
+    if (run.managerSessionID !== managerSessionID) {
+      throw new Error("Only the manager session can issue team interventions.");
+    }
+
+    const note = input.note.trim();
+    if (!note) {
+      throw new Error("Team intervention requires a non-empty note.");
+    }
+    if (input.action === "reassign" && !input.handoffTo?.trim()) {
+      throw new Error("Reassign intervention requires handoffTo.");
+    }
+
+    const payload = {
+      action: input.action,
+      targetAlias: input.targetAlias,
+      note,
+      handoffTo: input.handoffTo?.trim() || undefined,
+      deliverables: input.deliverables?.filter((item) => item.trim().length > 0) ?? []
+    };
+
+    const message = `[TEAM_MANAGER] ${JSON.stringify(payload)}`;
+    const result = await this.sendRoomMessage(managerSessionID, message, input.targetAlias, run.roomCode);
+
+    this.auditStore.append(run.runId, "team.manager.intervention", {
+      managerSessionID,
+      roomCode: run.roomCode,
+      action: input.action,
+      targetAlias: input.targetAlias,
+      note,
+      handoffTo: payload.handoffTo,
+      deliverables: payload.deliverables,
+      accepted: result.accepted,
+      reason: result.reason,
+      peerSessionID: result.peerSessionID,
+      threadId: result.threadId
+    });
+
+    return {
+      runId: run.runId,
+      roomCode: run.roomCode,
+      action: input.action,
+      targetAlias: input.targetAlias,
+      handoffTo: payload.handoffTo,
+      accepted: result.accepted,
+      reason: result.reason,
+      threadId: result.threadId,
+      peerSessionID: result.peerSessionID
+    };
+  }
+
+  async applyTeamPolicy(
+    managerSessionID: string,
+    input: {
+      runId?: string;
+      roomCode?: string;
+      action: RelayTeamInterventionAction;
+      targetAlias?: string;
+    }
+  ): Promise<{
+    applied: boolean;
+    runId: string;
+    roomCode: string;
+    action: RelayTeamInterventionAction;
+    targetAlias?: string;
+    mode: RelayTeamPolicyDecision["mode"];
+    sourceKind: string;
+    handoffTo?: string;
+    accepted: boolean;
+    reason?: string;
+    threadId: string;
+    peerSessionID: string;
+  }> {
+    const run = this.teamStore.getRunForSession(managerSessionID, input.roomCode, input.runId);
+    if (!run) {
+      throw new Error(`No relay workflow team is bound to session ${managerSessionID}.`);
+    }
+
+    const decision = this.buildPolicyDecisions(
+      this.teamStore.listWorkers(run.runId).map((worker) => this.decorateTeamWorker(worker)),
+      this.auditStore.list(run.runId)
+    ).find((entry) => entry.action === input.action && entry.targetAlias === input.targetAlias && entry.requiresExplicitApply);
+
+    if (!decision) {
+      throw new Error(`No applyable policy decision found for ${input.action}${input.targetAlias ? `:${input.targetAlias}` : ""}.`);
+    }
+
+    const applied = await this.interveneTeam(managerSessionID, {
+      runId: run.runId,
+      roomCode: run.roomCode,
+      action: input.action,
+      targetAlias: input.targetAlias,
+      note: decision.reason
+    });
+
+    this.auditStore.append(run.runId, "team.policy.applied", {
+      managerSessionID,
+      roomCode: run.roomCode,
+      action: input.action,
+      targetAlias: input.targetAlias,
+      mode: decision.mode,
+      sourceKind: decision.sourceKind,
+      reason: decision.reason
+    });
+
+    return {
+      applied: true,
+      runId: run.runId,
+      roomCode: run.roomCode,
+      action: input.action,
+      targetAlias: input.targetAlias,
+      mode: decision.mode,
+      sourceKind: decision.sourceKind,
+      handoffTo: decision.mode === "escalate" ? input.targetAlias : undefined,
+      accepted: applied.accepted,
+      reason: applied.reason,
+      threadId: applied.threadId,
+      peerSessionID: applied.peerSessionID
+    };
   }
 
   getTeamStatus(sessionID: string, runId?: string, roomCode?: string): RelayTeamStatusView {
@@ -357,6 +551,9 @@ export class RelayRuntime {
       return acc;
     }, {});
 
+    const allEvents = this.auditStore.list(run.runId);
+    const recentEvents = allEvents.slice(-12);
+
     return {
       runId: run.runId,
       roomCode: run.roomCode,
@@ -366,7 +563,11 @@ export class RelayRuntime {
       currentSessionRole: currentWorker?.role ?? "manager",
       workers,
       summary: { counts, healthCounts },
-      recentEvents: this.listRecentTeamEvents(run.runId, 12),
+      recentEvents,
+      attentionItems: this.buildAttentionItems(workers, allEvents),
+      interventionOutcomes: this.buildInterventionOutcomes(workers, allEvents),
+      policyDecisions: this.buildPolicyDecisions(workers, allEvents),
+      recommendedActions: this.buildRecommendedActions(workers, recentEvents),
       nextStep: this.buildTeamNextStep(run, workers)
     };
   }
@@ -683,6 +884,350 @@ export class RelayRuntime {
 
   private listRecentTeamEvents(runId: string, limit: number): AuditEventRecord[] {
     return this.auditStore.list(runId).slice(-limit);
+  }
+
+  private buildRecommendedActions(
+    workers: RelayTeamWorkerView[],
+    recentEvents: AuditEventRecord[]
+  ): Array<{
+    action: RelayTeamInterventionAction;
+    targetAlias?: string;
+    handoffTo?: string;
+    reason: string;
+  }> {
+    const actions: Array<{
+      action: RelayTeamInterventionAction;
+      targetAlias?: string;
+      handoffTo?: string;
+      reason: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    const pushAction = (action: RelayTeamInterventionAction, targetAlias: string | undefined, handoffTo: string | undefined, reason: string) => {
+      const key = `${action}:${targetAlias ?? ""}:${handoffTo ?? ""}:${reason}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      actions.push({ action, targetAlias, handoffTo, reason });
+    };
+
+    for (const worker of workers) {
+      if (worker.health === "stale") {
+        pushAction("nudge", worker.alias, undefined, `${worker.alias} looks stale and may need a wake-up check.`);
+      }
+      if (worker.status === "blocked") {
+        pushAction("unblock", worker.alias, undefined, worker.lastNote ? `${worker.alias} is blocked: ${worker.lastNote}` : `${worker.alias} is blocked and needs manager input.`);
+      }
+    }
+
+    for (const event of recentEvents) {
+      if (event.eventType === "team.worker.signal_rejected") {
+        const alias = typeof event.payload.alias === "string" ? event.payload.alias : undefined;
+        const reason = typeof event.payload.rejectionReason === "string"
+          ? event.payload.rejectionReason
+          : "worker sent an invalid workflow signal";
+        pushAction("retry", alias, undefined, `${alias ?? "worker"} should resend a valid TEAM signal: ${reason}`);
+      }
+
+      if (event.eventType === "team.worker.completed") {
+        const alias = typeof event.payload.alias === "string" ? event.payload.alias : undefined;
+        const metadata = (event.payload.metadata ?? {}) as Record<string, unknown>;
+        const handoffTo = typeof metadata.handoffTo === "string" ? metadata.handoffTo : undefined;
+        if (handoffTo && handoffTo !== "manager") {
+          const deliverables = Array.isArray(metadata.deliverables) ? metadata.deliverables.join(", ") : undefined;
+          const reason = deliverables
+            ? `${alias ?? "worker"} completed work and suggests handoff to ${handoffTo}: ${deliverables}`
+            : `${alias ?? "worker"} completed work and suggests handoff to ${handoffTo}.`;
+          pushAction("reassign", alias, handoffTo, reason);
+        }
+      }
+    }
+
+    return actions;
+  }
+
+  private buildAttentionItems(
+    workers: RelayTeamWorkerView[],
+    allEvents: AuditEventRecord[]
+  ): Array<{
+    kind: "stale_worker" | "blocked_worker" | "rejected_signal" | "escalated_issue";
+    severity: "high" | "medium";
+    targetAlias?: string;
+    count?: number;
+    reason: string;
+    suggestedAction: RelayTeamInterventionAction;
+  }> {
+    const items: Array<{
+      kind: "stale_worker" | "blocked_worker" | "rejected_signal" | "escalated_issue";
+      severity: "high" | "medium";
+      targetAlias?: string;
+      count?: number;
+      reason: string;
+      suggestedAction: RelayTeamInterventionAction;
+    }> = [];
+    const seen = new Set<string>();
+
+    const pushItem = (item: {
+      kind: "stale_worker" | "blocked_worker" | "rejected_signal" | "escalated_issue";
+      severity: "high" | "medium";
+      targetAlias?: string;
+      count?: number;
+      reason: string;
+      suggestedAction: RelayTeamInterventionAction;
+    }) => {
+      const key = `${item.kind}:${item.targetAlias ?? ""}:${item.reason}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      items.push(item);
+    };
+
+    for (const worker of workers) {
+      if (worker.health === "stale") {
+        pushItem({
+          kind: "stale_worker",
+          severity: "high",
+          targetAlias: worker.alias,
+          reason: `${worker.alias} has gone stale and still needs manager attention.`,
+          suggestedAction: "nudge"
+        });
+      }
+
+      if (worker.status === "blocked") {
+        pushItem({
+          kind: "blocked_worker",
+          severity: "high",
+          targetAlias: worker.alias,
+          reason: worker.lastNote ? `${worker.alias} is blocked: ${worker.lastNote}` : `${worker.alias} is blocked and waiting for intervention.`,
+          suggestedAction: "unblock"
+        });
+      }
+    }
+
+    const latestAcceptedByAlias = new Map<string, number>();
+    const rejectedCounts = new Map<string, number>();
+    const latestRejectedReason = new Map<string, string>();
+    const interventionCounts = new Map<string, number>();
+    const latestInterventionAction = new Map<string, RelayTeamInterventionAction>();
+
+    for (const event of allEvents) {
+      const workerAlias = typeof event.payload.alias === "string" ? event.payload.alias : undefined;
+
+      if (workerAlias && ["team.worker.ready", "team.worker.in_progress", "team.worker.completed", "team.worker.blocked"].includes(event.eventType)) {
+        latestAcceptedByAlias.set(workerAlias, event.id);
+      }
+
+      if (workerAlias && event.eventType === "team.worker.signal_rejected") {
+        rejectedCounts.set(workerAlias, (rejectedCounts.get(workerAlias) ?? 0) + 1);
+        if (typeof event.payload.rejectionReason === "string") {
+          latestRejectedReason.set(workerAlias, event.payload.rejectionReason);
+        }
+
+        const lastAcceptedId = latestAcceptedByAlias.get(workerAlias) ?? 0;
+        if (event.id > lastAcceptedId) {
+          pushItem({
+            kind: "rejected_signal",
+            severity: (rejectedCounts.get(workerAlias) ?? 0) >= 2 ? "high" : "medium",
+            targetAlias: workerAlias,
+            count: rejectedCounts.get(workerAlias),
+            reason: `${workerAlias} still has unresolved rejected TEAM signals: ${latestRejectedReason.get(workerAlias) ?? "invalid workflow signal"}`,
+            suggestedAction: "retry"
+          });
+        }
+      }
+
+      if (event.eventType === "team.manager.intervention") {
+        const targetAlias = typeof event.payload.targetAlias === "string" ? event.payload.targetAlias : undefined;
+        const action = typeof event.payload.action === "string" ? event.payload.action as RelayTeamInterventionAction : undefined;
+        if (targetAlias && action) {
+          interventionCounts.set(targetAlias, (interventionCounts.get(targetAlias) ?? 0) + 1);
+          latestInterventionAction.set(targetAlias, action);
+        }
+      }
+    }
+
+    for (const worker of workers) {
+      const interventionCount = interventionCounts.get(worker.alias) ?? 0;
+      if (interventionCount === 0) {
+        continue;
+      }
+
+      const latestAction = latestInterventionAction.get(worker.alias) ?? "retry";
+      if (worker.health === "stale") {
+        pushItem({
+          kind: "escalated_issue",
+          severity: "high",
+          targetAlias: worker.alias,
+          count: interventionCount,
+          reason: `${worker.alias} is still stale after ${interventionCount} manager intervention(s).`,
+          suggestedAction: latestAction === "nudge" ? "reassign" : latestAction
+        });
+      }
+
+      if (worker.status === "blocked") {
+        pushItem({
+          kind: "escalated_issue",
+          severity: "high",
+          targetAlias: worker.alias,
+          count: interventionCount,
+          reason: `${worker.alias} remains blocked after ${interventionCount} manager intervention(s).`,
+          suggestedAction: "reassign"
+        });
+      }
+
+      const rejectedCount = rejectedCounts.get(worker.alias) ?? 0;
+      if (rejectedCount >= 2) {
+        pushItem({
+          kind: "escalated_issue",
+          severity: "high",
+          targetAlias: worker.alias,
+          count: rejectedCount,
+          reason: `${worker.alias} has repeated rejected TEAM signals (${rejectedCount}).`,
+          suggestedAction: interventionCount > 0 ? "reassign" : "retry"
+        });
+      }
+    }
+
+    return items;
+  }
+
+  private buildInterventionOutcomes(
+    workers: RelayTeamWorkerView[],
+    allEvents: AuditEventRecord[]
+  ): Array<{
+    action: RelayTeamInterventionAction;
+    targetAlias?: string;
+    handoffTo?: string;
+    status: "pending" | "acknowledged" | "resolved" | "still_problematic";
+    reason: string;
+    createdAt: number;
+  }> {
+    const outcomes: Array<{
+      action: RelayTeamInterventionAction;
+      targetAlias?: string;
+      handoffTo?: string;
+      status: "pending" | "acknowledged" | "resolved" | "still_problematic";
+      reason: string;
+      createdAt: number;
+    }> = [];
+
+    const interventionEvents = allEvents.filter((event) => event.eventType === "team.manager.intervention");
+
+    for (let index = 0; index < interventionEvents.length; index += 1) {
+      const event = interventionEvents[index]!;
+      const payload = event.payload;
+      const targetAlias = typeof payload.targetAlias === "string" ? payload.targetAlias : undefined;
+      const handoffTo = typeof payload.handoffTo === "string" ? payload.handoffTo : undefined;
+      const action = typeof payload.action === "string" ? payload.action as RelayTeamInterventionAction : "retry";
+      const nextInterventionId = interventionEvents[index + 1]?.id ?? Number.POSITIVE_INFINITY;
+      const followingEvents = allEvents.filter((entry) => entry.id > event.id && entry.id < nextInterventionId);
+
+      let status: "pending" | "acknowledged" | "resolved" | "still_problematic" = "pending";
+      let reason = typeof payload.note === "string"
+        ? payload.note
+        : `manager issued ${action}`;
+
+      const sameAliasEvents = targetAlias
+        ? followingEvents.filter((entry) => {
+            const alias = typeof entry.payload.alias === "string" ? entry.payload.alias : undefined;
+            return alias === targetAlias;
+          })
+        : [];
+
+      const latestRelevant = sameAliasEvents
+        .filter((entry) => [
+          "team.worker.ready",
+          "team.worker.in_progress",
+          "team.worker.completed",
+          "team.worker.blocked",
+          "team.worker.signal_rejected"
+        ].includes(entry.eventType))
+        .at(-1);
+
+      if (latestRelevant?.eventType === "team.worker.signal_rejected") {
+        status = "still_problematic";
+        reason = typeof latestRelevant.payload.rejectionReason === "string"
+          ? latestRelevant.payload.rejectionReason
+          : `${targetAlias ?? "worker"} still sends invalid TEAM signals after intervention`;
+      } else if (latestRelevant && ["team.worker.ready", "team.worker.in_progress", "team.worker.completed"].includes(latestRelevant.eventType)) {
+        status = latestRelevant.eventType === "team.worker.completed" ? "resolved" : "acknowledged";
+        reason = typeof latestRelevant.payload.note === "string"
+          ? latestRelevant.payload.note
+          : latestRelevant.eventType === "team.worker.completed"
+            ? `${targetAlias ?? "worker"} completed the intervention follow-up`
+            : `${targetAlias ?? "worker"} responded with a valid TEAM signal`;
+      }
+
+      if (status === "pending" && targetAlias) {
+        const worker = workers.find((entry) => entry.alias === targetAlias);
+        if (worker?.health === "stale" || worker?.status === "blocked") {
+          status = "still_problematic";
+          reason = worker.lastNote ?? `${targetAlias} remains ${worker.status === "blocked" ? "blocked" : "stale"}`;
+        }
+      }
+
+      outcomes.push({
+        action,
+        targetAlias,
+        handoffTo,
+        status,
+        reason,
+        createdAt: event.createdAt
+      });
+    }
+
+    return outcomes;
+  }
+
+  private buildPolicyDecisions(
+    workers: RelayTeamWorkerView[],
+    allEvents: AuditEventRecord[]
+  ): RelayTeamPolicyDecision[] {
+    const decisions: RelayTeamPolicyDecision[] = [];
+    const seen = new Set<string>();
+
+    const attentionItems = this.buildAttentionItems(workers, allEvents);
+    const interventionOutcomes = this.buildInterventionOutcomes(workers, allEvents);
+
+    const pushDecision = (decision: RelayTeamPolicyDecision) => {
+      const key = `${decision.mode}:${decision.action ?? ""}:${decision.targetAlias ?? ""}:${decision.reason}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      decisions.push(decision);
+    };
+
+    for (const item of attentionItems) {
+      pushDecision({
+        mode: item.kind === "escalated_issue" ? "escalate" : "manual_intervention",
+        action: item.suggestedAction,
+        targetAlias: item.targetAlias,
+        severity: item.severity,
+        reason: item.reason,
+        requiresExplicitApply: true,
+        sourceKind: item.kind
+      });
+    }
+
+    for (const outcome of interventionOutcomes) {
+      if (outcome.status !== "pending") {
+        continue;
+      }
+      pushDecision({
+        mode: "observe",
+        action: outcome.action,
+        targetAlias: outcome.targetAlias,
+        severity: "medium",
+        reason: outcome.reason,
+        requiresExplicitApply: false,
+        sourceKind: "intervention_pending"
+      });
+    }
+
+    return decisions;
   }
 
   private decorateTeamWorker(worker: RelayTeamWorker): RelayTeamWorkerView {

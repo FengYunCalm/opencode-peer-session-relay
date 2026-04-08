@@ -349,6 +349,65 @@ export const RelayPlugin: Plugin = async (input, options) => {
         roomCode: tool.schema.string().optional()
       },
       execute: async ({ runId, roomCode }, context) => JSON.stringify(state.runtime.getTeamStatus(context.sessionID, runId, roomCode), null, 2)
+    }),
+    relay_team_intervene: tool({
+      description: "Issue a manager intervention into the relay workflow team and record it in the workflow timeline",
+      args: {
+        runId: tool.schema.string().optional(),
+        roomCode: tool.schema.string().optional(),
+        action: tool.schema.string().min(1),
+        targetAlias: tool.schema.string().optional(),
+        note: tool.schema.string().min(1),
+        handoffTo: tool.schema.string().optional(),
+        deliverables: tool.schema.string().optional()
+      },
+      execute: async ({ runId, roomCode, action, targetAlias, note, handoffTo, deliverables }, context) => {
+        const normalizedAction = action === "reassign"
+          ? "reassign"
+          : action === "unblock"
+            ? "unblock"
+            : action === "nudge"
+              ? "nudge"
+              : "retry";
+        const parsedDeliverables = deliverables
+          ? deliverables.split(",").map((item) => item.trim()).filter(Boolean)
+          : undefined;
+
+        return JSON.stringify(await state.runtime.interveneTeam(context.sessionID, {
+          runId,
+          roomCode,
+          action: normalizedAction,
+          targetAlias,
+          note,
+          handoffTo,
+          deliverables: parsedDeliverables
+        }), null, 2);
+      }
+    }),
+    relay_team_apply_policy: tool({
+      description: "Apply one explicit policy decision from relay_team_status through the standard manager intervention path",
+      args: {
+        runId: tool.schema.string().optional(),
+        roomCode: tool.schema.string().optional(),
+        action: tool.schema.string().min(1),
+        targetAlias: tool.schema.string().optional()
+      },
+      execute: async ({ runId, roomCode, action, targetAlias }, context) => {
+        const normalizedAction = action === "reassign"
+          ? "reassign"
+          : action === "unblock"
+            ? "unblock"
+            : action === "nudge"
+              ? "nudge"
+              : "retry";
+
+        return JSON.stringify(await state.runtime.applyTeamPolicy(context.sessionID, {
+          runId,
+          roomCode,
+          action: normalizedAction,
+          targetAlias
+        }), null, 2);
+      }
     })
   } as const;
 
@@ -366,7 +425,9 @@ export const RelayPlugin: Plugin = async (input, options) => {
     "mcp__relay__message_mark_read": relayTools.relay_message_mark_read,
     "mcp__relay__transcript_export": relayTools.relay_transcript_export,
     "mcp__relay__team_start": relayTools.relay_team_start,
-    "mcp__relay__team_status": relayTools.relay_team_status
+    "mcp__relay__team_status": relayTools.relay_team_status,
+    "mcp__relay__team_intervene": relayTools.relay_team_intervene,
+    "mcp__relay__team_apply_policy": relayTools.relay_team_apply_policy
   } as const;
 
   return {

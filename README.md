@@ -66,6 +66,7 @@ For normal session-aware relay usage, call only the plugin tools: `relay_room_*`
 2. The plugin creates a group room plus child worker sessions
 3. Workers join with fixed aliases and report workflow signals such as `[TEAM_READY]`, `[TEAM_PROGRESS]`, `[TEAM_BLOCKER]`, and `[TEAM_DONE]`
 4. The manager checks `relay_team_status` to monitor readiness, active work, blockers, completion, and the recent workflow event trail
+5. The manager uses `relay_team_intervene` for standardized retry/reassign/unblock actions that are recorded in the workflow timeline
 
 Quick tutorial: `docs/team-workflow-quickstart.md`
 

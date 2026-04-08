@@ -94,6 +94,20 @@ type RelayWorkflowSignalPayload = {
   metadata?: Record<string, unknown>;
 };
 
+type RelayWorkflowSignalClassification = {
+  matched: boolean;
+  accepted: boolean;
+  rejectionReason?: string;
+  status: RelayTeamWorkerStatus;
+  note: string;
+  ready: boolean;
+  source?: string;
+  phase?: string;
+  progress?: number;
+  evidence?: unknown;
+  metadata?: Record<string, unknown>;
+};
+
 const workflowSignalReservedKeys = new Set(["source", "phase", "note", "summary", "progress", "evidence"]);
 
 function normalizeSignalPayload(raw: string): RelayWorkflowSignalPayload {
@@ -139,22 +153,48 @@ function normalizeSignalPayload(raw: string): RelayWorkflowSignalPayload {
   }
 }
 
-export function classifyRelayWorkflowSignal(message: string): {
-  matched: boolean;
-  status: RelayTeamWorkerStatus;
-  note: string;
-  ready: boolean;
-  source?: string;
-  phase?: string;
-  progress?: number;
-  evidence?: unknown;
-  metadata?: Record<string, unknown>;
-} {
+function validateWorkflowSignal(prefix: string, payload: RelayWorkflowSignalPayload): { accepted: boolean; rejectionReason?: string } {
+  const note = payload.note.trim();
+  if (!note) {
+    return { accepted: false, rejectionReason: `${prefix} requires a non-empty note` };
+  }
+
+  if (prefix === relayWorkflowSignalPrefixes.ready) {
+    return { accepted: true };
+  }
+
+  if (!payload.source) {
+    return { accepted: false, rejectionReason: `${prefix} requires source` };
+  }
+
+  if (!payload.phase) {
+    return { accepted: false, rejectionReason: `${prefix} requires phase` };
+  }
+
+  if (prefix === relayWorkflowSignalPrefixes.done) {
+    const hasEvidence = Array.isArray(payload.evidence)
+      ? payload.evidence.length > 0
+      : payload.evidence !== undefined && payload.evidence !== null;
+    const deliverables = payload.metadata?.deliverables;
+    const hasDeliverables = Array.isArray(deliverables) && deliverables.length > 0;
+
+    if (!hasEvidence && !hasDeliverables) {
+      return { accepted: false, rejectionReason: `${prefix} requires evidence or deliverables` };
+    }
+  }
+
+  return { accepted: true };
+}
+
+export function classifyRelayWorkflowSignal(message: string): RelayWorkflowSignalClassification {
   const normalized = message.trim();
   if (normalized.startsWith(relayWorkflowSignalPrefixes.blocker)) {
     const payload = normalizeSignalPayload(normalized.slice(relayWorkflowSignalPrefixes.blocker.length));
+    const validation = validateWorkflowSignal(relayWorkflowSignalPrefixes.blocker, payload);
     return {
       matched: true,
+      accepted: validation.accepted,
+      rejectionReason: validation.rejectionReason,
       status: "blocked",
       note: payload.note || normalized,
       ready: false,
@@ -167,8 +207,11 @@ export function classifyRelayWorkflowSignal(message: string): {
   }
   if (normalized.startsWith(relayWorkflowSignalPrefixes.done)) {
     const payload = normalizeSignalPayload(normalized.slice(relayWorkflowSignalPrefixes.done.length));
+    const validation = validateWorkflowSignal(relayWorkflowSignalPrefixes.done, payload);
     return {
       matched: true,
+      accepted: validation.accepted,
+      rejectionReason: validation.rejectionReason,
       status: "completed",
       note: payload.note || normalized,
       ready: true,
@@ -181,8 +224,11 @@ export function classifyRelayWorkflowSignal(message: string): {
   }
   if (normalized.startsWith(relayWorkflowSignalPrefixes.progress)) {
     const payload = normalizeSignalPayload(normalized.slice(relayWorkflowSignalPrefixes.progress.length));
+    const validation = validateWorkflowSignal(relayWorkflowSignalPrefixes.progress, payload);
     return {
       matched: true,
+      accepted: validation.accepted,
+      rejectionReason: validation.rejectionReason,
       status: "in_progress",
       note: payload.note || normalized,
       ready: true,
@@ -195,8 +241,11 @@ export function classifyRelayWorkflowSignal(message: string): {
   }
   if (normalized.startsWith(relayWorkflowSignalPrefixes.ready)) {
     const payload = normalizeSignalPayload(normalized.slice(relayWorkflowSignalPrefixes.ready.length));
+    const validation = validateWorkflowSignal(relayWorkflowSignalPrefixes.ready, payload);
     return {
       matched: true,
+      accepted: validation.accepted,
+      rejectionReason: validation.rejectionReason,
       status: "ready",
       note: payload.note || normalized,
       ready: true,
@@ -209,6 +258,7 @@ export function classifyRelayWorkflowSignal(message: string): {
   }
   return {
     matched: false,
+    accepted: false,
     status: "joined",
     note: normalized,
     ready: false
@@ -274,7 +324,7 @@ function buildWorkerBootstrapPrompt(spec: TeamWorkerSpec, task: string, roomCode
     `4. Mission: ${spec.mission}`,
     `5. ${roleWorkflowGuidance}`,
     "6. Use tools and workflow actions when coordinating through relay messages; do not treat relay input as an end-user chat.",
-    "7. If you report progress, blocker, or completion, prefer this exact JSON form after the [TEAM_*] prefix: {\"source\":\"openspec|superpowers|omo\",\"phase\":\"...\",\"note\":\"...\",\"progress\":40,\"evidence\":[\"artifact-1\",\"artifact-2\"],\"handoffTo\":\"manager\",\"deliverables\":[\"spec.md\"]}",
+    "7. TEAM_PROGRESS, TEAM_BLOCKER, and TEAM_DONE must include valid structured fields. Use this exact JSON shape after the [TEAM_*] prefix: {\"source\":\"openspec|superpowers|omo\",\"phase\":\"...\",\"note\":\"...\",\"progress\":40,\"evidence\":[\"artifact-1\",\"artifact-2\"],\"handoffTo\":\"manager\",\"deliverables\":[\"spec.md\"]}. Low-quality signals are ignored by the runtime.",
     "8. You may use any actually available local skills/plugins/workflows in this session, especially OpenSpec, Superpowers, and OMO if they are exposed here. BMAD remains optional planning-mode only if actually exposed and the task is large enough.",
     "9. If relay tools or required workflow capabilities are missing, report that plainly in your own session instead of inventing success."
   ].join("\n");

@@ -65,6 +65,7 @@ Workers use short relay room messages with these markers:
 - `[TEAM_DONE] {"source":"openspec|superpowers|omo","phase":"...","note":"completed their part","evidence":[...],"handoffTo":"manager","deliverables":[...]}`
 
 These signals are persisted in the workflow state and are also included in compaction context.
+`[TEAM_PROGRESS]`, `[TEAM_BLOCKER]`, and `[TEAM_DONE]` must include valid structured fields. If `source`, `phase`, or required completion evidence is missing, the runtime can reject the signal and keep the previous worker status.
 
 The runtime does **not** parse OMO, Superpowers, or OpenSpec native state machines directly. It only trusts the unified `[TEAM_*]` signals plus health/stale detection.
 
@@ -87,7 +88,19 @@ If one of those systems is not actually exposed in the worker session, fall back
    - `relay_thread_create`
    - `relay_message_send`
    - `relay_transcript_export`
-4. If a worker becomes `blocked` or `failed`, use `relay_team_status` to identify the role, note, and recent event trail, then coordinate the next action from the manager session
+4. If a worker becomes `blocked`, `failed`, `stale`, or repeatedly sends rejected TEAM signals, use `relay_team_intervene` to issue a standardized manager action (`retry`, `reassign`, `unblock`, `nudge`)
+5. Use `relay_team_status` again to confirm the intervention was recorded in `recentEvents`
+
+`relay_team_status` also returns:
+
+- `recommendedActions` — manager-side suggestions derived from stale workers, rejected TEAM signals, blocked workers, or explicit handoff hints
+- `attentionItems` — more stable high-priority issues that should not be missed even if the recent event window keeps moving
+- `interventionOutcomes` — whether a manager intervention is still pending, has been acknowledged by a valid TEAM signal, has been resolved by a completion/handoff signal, or is still problematic after the intervention
+- `policyDecisions` — a normalized manager policy layer that summarizes whether the current situation should be observed, manually intervened, or escalated
+
+If the same worker keeps sending rejected TEAM signals or remains problematic after intervention, `attentionItems` can escalate the issue and suggest a stronger action such as `reassign`.
+
+If you want to apply one of the explicit policy decisions directly, use `relay_team_apply_policy` instead of manually translating the decision into a separate intervention call.
 
 ## Important boundary
 

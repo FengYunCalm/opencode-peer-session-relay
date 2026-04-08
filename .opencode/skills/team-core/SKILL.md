@@ -52,6 +52,13 @@ After the tool call, stay in the current session as manager.
 - treat workers as asynchronous child sessions
 - use `relay_team_status` / `mcp__relay__team_status` to monitor readiness, blockers, and completion
 - use `relay_team_status` as the manager timeline view; it includes recent workflow events in addition to the latest worker snapshot
+- use `recommendedActions` from `relay_team_status` as manager suggestions, not automatic truth; decide whether to execute `relay_team_intervene`
+- use `attentionItems` from `relay_team_status` as the stable high-priority issue list that deserves manager attention first
+- use `interventionOutcomes` from `relay_team_status` to see whether a manager intervention is still pending, acknowledged by a valid worker response, resolved by a valid completion/handoff, or still problematic
+- use `policyDecisions` from `relay_team_status` as the normalized governance layer: observe, manually intervene, or escalate
+- treat repeated rejected signals or no-improvement-after-intervention as escalation signs; prefer stronger actions like `reassign` when `attentionItems` upgrades the issue
+- use `relay_team_intervene` / `mcp__relay__team_intervene` when you need a standardized retry, reassign, unblock, or nudge action
+- use `relay_team_apply_policy` / `mcp__relay__team_apply_policy` when you want to apply one explicit `policyDecision` directly, without manually restating the same action/reason
 - use normal plugin relay tools for any follow-up coordination
 - keep all normal relay work on the plugin surface: `relay_room_*`, `relay_thread_*`, `relay_message_*`, `relay_transcript_export`, or the equivalent `mcp__relay__*` aliases
 
@@ -66,6 +73,9 @@ Workers should coordinate through short structured room messages:
 
 These markers help the manager keep workflow state readable and durable across compaction.
 Include optional handoff fields like `handoffTo` and `deliverables` when a worker is handing work back to the manager or another role.
+`[TEAM_PROGRESS]`, `[TEAM_BLOCKER]`, and `[TEAM_DONE]` must include valid structured fields. If `source`, `phase`, or required completion evidence is missing, the runtime may ignore the signal and record it as rejected audit history.
+
+Manager interventions should use the dedicated tool instead of ad-hoc room chatter. The tool records a `team.manager.intervention` event and sends a `[TEAM_MANAGER] {...}` directive into the room.
 
 ## Worker capability contract
 
