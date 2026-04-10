@@ -300,33 +300,37 @@ function buildWorkerBootstrapPrompt(spec: TeamWorkerSpec, task: string, roomCode
     ? "Prefer OpenSpec commands/MCP or locally exposed OpenSpec skills to produce proposal/spec/design/tasks artifacts for this change."
     : spec.role === "implementer"
       ? "Prefer Superpowers-style execution skills already exposed in this session, especially writing-plans / executing-plans / subagent-driven-development style flows when available."
-      : "Prefer OMO review/orchestration capabilities already exposed in this session for review, escalation, and quality-focused analysis. Use Superpowers review gates if they are exposed here."
-  ;
+      : "Prefer OMO review/orchestration capabilities already exposed in this session for review, escalation, and quality-focused analysis. Use Superpowers review gates if they are exposed here. Keep interim review on [TEAM_PROGRESS] or [TEAM_BLOCKER], and only emit [TEAM_DONE] when final independent acceptance passes with phase \"final-acceptance-pass\".";
 
   return [
     `You are the ${spec.role} worker in a relay-backed OpenCode workflow team.`,
     "",
-    `Task: ${task}`,
-    `Manager session: ${managerSessionID}`,
-    `Relay room code: ${roomCode}`,
-    `Required alias: ${spec.alias}`,
+    "Task context:",
+    `- Task: ${task}`,
+    `- Manager session: ${managerSessionID}`,
+    `- Relay room code: ${roomCode}`,
+    `- Required alias: ${spec.alias}`,
     "",
-    "Workflow signal contract:",
-    `${relayWorkflowSignalPrefixes.ready} short ready confirmation after join`,
-    `${relayWorkflowSignalPrefixes.progress} JSON payload for structured progress/evidence after real work has started`,
-    `${relayWorkflowSignalPrefixes.blocker} JSON payload describing what is blocked and what is needed`,
-    `${relayWorkflowSignalPrefixes.done} JSON payload for final completion handoff`,
-    "",
-    "Execute this bootstrap exactly once:",
+    "Bootstrap checklist:",
     "1. Load the `relay-room` skill.",
     `2. Join the relay group room using alias \"${spec.alias}\" via relay_room_join or mcp__relay__room_join. Do not pass sessionID manually.`,
     `3. Send one short ready message to the room after joining using the prefix ${relayWorkflowSignalPrefixes.ready}.`,
     `4. Mission: ${spec.mission}`,
-    `5. ${roleWorkflowGuidance}`,
-    "6. Use tools and workflow actions when coordinating through relay messages; do not treat relay input as an end-user chat.",
-    "7. TEAM_PROGRESS, TEAM_BLOCKER, and TEAM_DONE must include valid structured fields. Use this exact JSON shape after the [TEAM_*] prefix: {\"source\":\"openspec|superpowers|omo\",\"phase\":\"...\",\"note\":\"...\",\"progress\":40,\"evidence\":[\"artifact-1\",\"artifact-2\"],\"handoffTo\":\"manager\",\"deliverables\":[\"spec.md\"]}. Low-quality signals are ignored by the runtime.",
-    "8. You may use any actually available local skills/plugins/workflows in this session, especially OpenSpec, Superpowers, and OMO if they are exposed here. BMAD remains optional planning-mode only if actually exposed and the task is large enough.",
-    "9. If relay tools or required workflow capabilities are missing, report that plainly in your own session instead of inventing success."
+    "",
+    "Role guidance:",
+    `- Tooling: ${roleWorkflowGuidance}`,
+    "- Coordination: Use tools and workflow actions when coordinating through relay messages; do not treat relay input as an end-user chat.",
+    "- Capability scope: You may use any actually available local skills/plugins/workflows in this session, especially OpenSpec, Superpowers, and OMO if they are exposed here. BMAD remains optional planning-mode only if actually exposed and the task is large enough.",
+    "- Failure mode: If relay tools or required workflow capabilities are missing, report that plainly in your own session instead of inventing success.",
+    "",
+    "Signal protocol:",
+    `${relayWorkflowSignalPrefixes.ready} short ready confirmation after join`,
+    `${relayWorkflowSignalPrefixes.progress} JSON payload for structured progress/evidence after real work has started`,
+    `${relayWorkflowSignalPrefixes.blocker} JSON payload describing what is blocked and what is needed`,
+    `${relayWorkflowSignalPrefixes.done} JSON payload for final completion handoff`,
+    "Use this exact JSON shape after the [TEAM_*] prefix:",
+    "{\"source\":\"openspec|superpowers|omo\",\"phase\":\"...\",\"note\":\"...\",\"progress\":40,\"evidence\":[\"artifact-1\",\"artifact-2\"],\"handoffTo\":\"manager\",\"deliverables\":[\"spec.md\"]}",
+    "Low-quality signals are ignored by the runtime."
   ].join("\n");
 }
 

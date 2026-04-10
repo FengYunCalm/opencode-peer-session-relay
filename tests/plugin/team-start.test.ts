@@ -82,6 +82,42 @@ describe("relay team start tool", () => {
     });
     expect(promptAsync).toHaveBeenCalledTimes(3);
     expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("Task context:")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("Bootstrap checklist:")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("Signal protocol:")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("Role guidance:")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
       path: { id: "session-planner" },
       body: {
         parts: [
@@ -105,6 +141,24 @@ describe("relay team start tool", () => {
         parts: [
           expect.objectContaining({
             text: expect.stringContaining("{\"source\":\"openspec|superpowers|omo\"")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[2]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("final-acceptance-pass")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[2]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("final-acceptance-pass")
           })
         ]
       }
