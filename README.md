@@ -18,9 +18,9 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 ## Current architecture
 
 - **Public contract:** A2A over HTTP JSON-RPC and SSE
-- **Runtime shape:** plugin-first for session hooks, room operations, and session-aware delivery; standalone MCP is compatibility-only
+- **Runtime shape:** plugin-first for session hooks, room operations, workflow orchestration, and session-aware delivery; standalone MCP is compatibility-only
 - **Delivery gate:** `session.status` is the primary scheduling signal
-- **Persistence:** local SQLite-backed task, audit, session-link, room, thread, and message state
+- **Persistence:** local SQLite-backed task, audit, session-link, room, thread, message, and team-run state
 - **Operations surface:** plugin relay tools are the primary operator surface; standalone MCP is compatibility-only and uses distinct `compat_*` tool names
 
 ## Implemented capabilities
@@ -30,10 +30,10 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 - private/group room flow: `relay_room_create`, `relay_room_join`, `relay_room_status`, `relay_room_send`
 - team governance: `relay_room_members`, `relay_room_set_role`
 - durable thread/message flow: `relay_thread_create`, `relay_thread_list`, `relay_message_list`, `relay_message_send`, `relay_message_mark_read`, `relay_transcript_export`
-- workflow bootstrap/status flow: `relay_team_start`, `relay_team_status`
+- workflow bootstrap and management: `relay_team_start`, `relay_team_status`, `relay_team_intervene`, `relay_team_apply_policy`
 - SSE task event streaming
 - idle-gated dispatch into OpenCode sessions
-- duplicate suppression, human takeover guard, replay path, and audit trail
+- duplicate suppression, human takeover guard, replay path, audit trail, and worker-progress governance
 - public response/event sanitization for task metadata
 
 ## OpenCode skill and local plugin workflow
@@ -67,8 +67,15 @@ For normal session-aware relay usage, call only the plugin tools: `relay_room_*`
 3. Workers join with fixed aliases and report workflow signals such as `[TEAM_READY]`, `[TEAM_PROGRESS]`, `[TEAM_BLOCKER]`, and `[TEAM_DONE]`
 4. The manager checks `relay_team_status` to monitor readiness, active work, blockers, completion, and the recent workflow event trail
 5. The manager uses `relay_team_intervene` for standardized retry/reassign/unblock actions that are recorded in the workflow timeline
+6. A team run only reaches `completed` after the reviewer emits a final acceptance handoff with phase `final-acceptance-pass`
 
 Quick tutorial: `docs/team-workflow-quickstart.md`
+
+## Requirements
+
+- Node.js `>= 22`
+- pnpm `10.8.1` (see `packageManager` in `package.json`)
+- Windows, macOS, or Linux environment capable of running the local OpenCode plugin runtime
 
 ## Get the code
 
@@ -79,14 +86,14 @@ cd opencode-peer-session-relay
 
 ## Verification
 
-Current local verification target:
+Fresh local verification in this workspace:
 
 ```bash
 corepack pnpm test
 corepack pnpm exec tsc -b --pretty false
 ```
 
-At the time of writing, the repository passes the full local test suite and TypeScript project build.
+The current repository state passes the full local test suite and the TypeScript project build.
 
 ## Development
 
