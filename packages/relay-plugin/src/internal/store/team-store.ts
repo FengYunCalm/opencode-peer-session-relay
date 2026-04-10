@@ -92,9 +92,24 @@ function deserializeEvidence(value: string | null): unknown {
   }
 }
 
+function reviewerFinalAcceptanceSatisfied(workers: RelayTeamWorker[]): boolean {
+  const reviewers = workers.filter((worker) => worker.role === "reviewer");
+  if (reviewers.length === 0) {
+    return true;
+  }
+
+  return reviewers.every((worker) => worker.status === "completed" && worker.workflowPhase === "final-acceptance-pass");
+}
+
 function aggregateRunStatus(workers: RelayTeamWorker[], currentStatus?: RelayTeamRunStatus): RelayTeamRunStatus {
-  if (["failed", "completed"].includes(currentStatus ?? "")) {
-    return currentStatus!;
+  const reviewerGateSatisfied = reviewerFinalAcceptanceSatisfied(workers);
+
+  if (currentStatus === "failed") {
+    return currentStatus;
+  }
+
+  if (currentStatus === "completed" && reviewerGateSatisfied && workers.every((worker) => worker.status === "completed")) {
+    return currentStatus;
   }
 
   if (workers.length === 0) {
@@ -103,12 +118,22 @@ function aggregateRunStatus(workers: RelayTeamWorker[], currentStatus?: RelayTea
   if (workers.some((worker) => worker.status === "failed")) {
     return "failed";
   }
-  if (workers.every((worker) => worker.status === "completed")) {
-    return "completed";
-  }
   if (workers.some((worker) => worker.status === "blocked")) {
     return "blocked";
   }
+
+  const allNonReviewerWorkersCompleted = workers
+    .filter((worker) => worker.role !== "reviewer")
+    .every((worker) => worker.status === "completed");
+
+  if (workers.every((worker) => worker.status === "completed")) {
+    return reviewerGateSatisfied ? "completed" : "in_progress";
+  }
+
+  if (allNonReviewerWorkersCompleted && !reviewerGateSatisfied) {
+    return "in_progress";
+  }
+
   if (workers.some((worker) => worker.status === "in_progress")) {
     return "in_progress";
   }
