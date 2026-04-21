@@ -15,6 +15,11 @@
 - `docs/plans/2026-04-03-opencode-a2a-plugin-relay-implementation-plan.md` — 当前设计所依据的实现计划
 - `.opencode/skills/relay-room/SKILL.md` — 项目内置的 relay-room 执行型 skill
 
+## Graphify
+
+- `graphify-out/` 是刻意提交到仓库中的可导航知识库
+- 图谱由项目的 graphify watch 工作流刷新，而不是当成可随时丢弃的构建产物
+
 ## 当前架构
 
 - **公开协议：** A2A over HTTP JSON-RPC and SSE

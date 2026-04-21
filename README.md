@@ -15,6 +15,11 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 - `docs/plans/2026-04-03-opencode-a2a-plugin-relay-implementation-plan.md` — implementation plan used to drive the current design
 - `.opencode/skills/relay-room/SKILL.md` — project-local relay-room execution skill
 
+## Graphify
+
+- `graphify-out/` is intentionally committed as the repo's navigable knowledge base
+- The graph is refreshed by the repo's graphify watch workflow rather than treated as disposable build output
+
 ## Current architecture
 
 - **Public contract:** A2A over HTTP JSON-RPC and SSE
