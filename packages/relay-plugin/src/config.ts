@@ -60,7 +60,14 @@ export type RelaySessionPair = z.infer<typeof relaySessionPairSchema>;
 type RelayPluginConfigInput = z.infer<typeof relayPluginConfigInputSchema>;
 
 export function resolveInstalledConfigPathFromModuleUrl(moduleUrl: string): string {
-  return fileURLToPath(new URL("./opencode-a2a-relay.config.json", moduleUrl));
+  const configUrl = new URL("./opencode-a2a-relay.config.json", moduleUrl);
+  const pathname = decodeURIComponent(configUrl.pathname);
+
+  if (/^\/[A-Za-z]:\//.test(pathname)) {
+    return pathname.slice(1).replace(/\//g, "\\");
+  }
+
+  return fileURLToPath(configUrl);
 }
 
 function resolveInstalledConfigPath(overridePath?: string): string {
