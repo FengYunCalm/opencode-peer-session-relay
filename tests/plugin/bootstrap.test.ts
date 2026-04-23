@@ -111,7 +111,7 @@ describe("relay plugin bootstrap", () => {
     expect(output.context.join("\n")).toContain("session-2");
   });
 
-  it("reuses a single relay instance across concurrent projects with the same config", async () => {
+  it("keeps concurrent projects isolated even when the config matches", async () => {
     const databasePath = createTestDatabaseLocation("bootstrap-shared-instance");
     dbLocations.push(databasePath);
     const startSpy = vi.spyOn(A2ARelayHost.prototype, "start").mockImplementation(async function () {
@@ -126,8 +126,8 @@ describe("relay plugin bootstrap", () => {
 
     expect(hooksA.tool).toBeDefined();
     expect(hooksB.tool).toBeDefined();
-    expect(startSpy).toHaveBeenCalledTimes(1);
-    expect(getRelayPluginStateForTest("project-test-3")).toBe(getRelayPluginStateForTest("project-test-4"));
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(getRelayPluginStateForTest("project-test-3")).not.toBe(getRelayPluginStateForTest("project-test-4"));
 
     startSpy.mockRestore();
   });

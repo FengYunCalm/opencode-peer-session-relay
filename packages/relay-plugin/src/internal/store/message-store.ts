@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { initializeRelaySchema } from "./schema.js";
-import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
+import { isRetryableSqliteError, openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 import type { RelayThread, RelayThreadParticipant } from "./thread-store.js";
 
 export type RelayMessage = {
@@ -36,7 +36,7 @@ function createMessageId(): string {
 
 function shouldRetryMessageInsert(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return message.includes("locked") || message.includes("busy") || message.includes("unique");
+  return isRetryableSqliteError(error) || message.includes("unique");
 }
 
 export class MessageStore {
@@ -45,6 +45,10 @@ export class MessageStore {
   constructor(location = ":memory:") {
     this.database = openSqliteDatabase(location);
     initializeRelaySchema(this.database);
+  }
+
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
   }
 
   appendMessage(input: {
@@ -58,21 +62,20 @@ export class MessageStore {
     const messageId = input.messageId ?? createMessageId();
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      this.database.exec("BEGIN IMMEDIATE");
       try {
-        const nextSeqRow = this.database
-          .prepare(`SELECT COALESCE(MAX(seq), 0) + 1 as next_seq FROM relay_messages WHERE thread_id = ?`)
-          .get(input.threadId) as { next_seq: number };
-        const seq = nextSeqRow.next_seq;
+        return this.database.transaction(() => {
+          const nextSeqRow = this.database
+            .prepare(`SELECT COALESCE(MAX(seq), 0) + 1 as next_seq FROM relay_messages WHERE thread_id = ?`)
+            .get(input.threadId) as { next_seq: number };
+          const seq = nextSeqRow.next_seq;
 
-        this.database
-          .prepare(`INSERT INTO relay_messages (thread_id, seq, message_id, sender_session_id, message_type, body_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(input.threadId, seq, messageId, input.senderSessionID, input.messageType, JSON.stringify(input.body), createdAt);
+          this.database
+            .prepare(`INSERT INTO relay_messages (thread_id, seq, message_id, sender_session_id, message_type, body_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+            .run(input.threadId, seq, messageId, input.senderSessionID, input.messageType, JSON.stringify(input.body), createdAt);
 
-        this.database.exec("COMMIT");
-        return this.getMessage(input.threadId, seq)!;
+          return this.getMessage(input.threadId, seq)!;
+        });
       } catch (error) {
-        this.database.exec("ROLLBACK");
         if (attempt < 4 && shouldRetryMessageInsert(error)) {
           continue;
         }

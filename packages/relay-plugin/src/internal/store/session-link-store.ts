@@ -9,6 +9,10 @@ export class SessionLinkStore {
     initializeRelaySchema(this.database);
   }
 
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
+  }
+
   link(taskId: string, sessionID: string): void {
     this.database
       .prepare(`INSERT INTO relay_session_links (task_id, session_id, created_at) VALUES (?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET session_id = excluded.session_id`)

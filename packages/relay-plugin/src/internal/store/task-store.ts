@@ -60,6 +60,10 @@ export class TaskStore {
     initializeRelaySchema(this.database);
   }
 
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
+  }
+
   createTask(input: CreateTaskInput): StoredRelayTask {
     const now = Date.now();
     this.database

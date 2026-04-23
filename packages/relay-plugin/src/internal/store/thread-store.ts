@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { initializeRelaySchema } from "./schema.js";
-import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
+import { isRetryableSqliteError, openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
 export type RelayThreadKind = "direct" | "group";
 
@@ -53,12 +53,21 @@ function createDirectKey(roomCode: string, sessionIDs: string[]): string {
   return `${roomCode}:${[...new Set(sessionIDs)].sort().join(":")}`;
 }
 
+function shouldRetryThreadMutation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return isRetryableSqliteError(error) || message.includes("unique") || message.includes("constraint");
+}
+
 export class ThreadStore {
   private readonly database: SqliteDatabase;
 
   constructor(location = ":memory:") {
     this.database = openSqliteDatabase(location);
     initializeRelaySchema(this.database);
+  }
+
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
   }
 
   ensureDirectThread(roomCode: string, participantSessionIDs: string[], createdBySessionID: string): RelayThread {
@@ -68,13 +77,23 @@ export class ThreadStore {
       return existing;
     }
 
-    return this.createThread({
-      roomCode,
-      kind: "direct",
-      directKey,
-      createdBySessionID,
-      participantSessionIDs
-    });
+    try {
+      return this.createThread({
+        roomCode,
+        kind: "direct",
+        directKey,
+        createdBySessionID,
+        participantSessionIDs
+      });
+    } catch (error) {
+      if (shouldRetryThreadMutation(error)) {
+        const concurrent = this.getThreadByDirectKey(directKey);
+        if (concurrent) {
+          return concurrent;
+        }
+      }
+      throw error;
+    }
   }
 
   ensureGroupThread(roomCode: string, participantSessionIDs: string[], createdBySessionID: string, title = "room-main"): RelayThread {
@@ -163,16 +182,18 @@ export class ThreadStore {
   }
 
   addParticipants(threadId: string, sessionIDs: string[]): void {
-    const now = Date.now();
-    const uniqueSessionIDs = [...new Set(sessionIDs)];
-    for (const sessionID of uniqueSessionIDs) {
-      this.database.prepare(`
-          INSERT INTO relay_thread_participants (thread_id, session_id, last_read_seq, last_notified_seq, joined_at, updated_at)
-          VALUES (?, ?, 0, 0, ?, ?)
-          ON CONFLICT(thread_id, session_id) DO NOTHING
-        `).run(threadId, sessionID, now, now);
-    }
-    this.touchThread(threadId);
+    this.database.transaction(() => {
+      const now = Date.now();
+      const uniqueSessionIDs = [...new Set(sessionIDs)];
+      for (const sessionID of uniqueSessionIDs) {
+        this.database.prepare(`
+            INSERT INTO relay_thread_participants (thread_id, session_id, last_read_seq, last_notified_seq, joined_at, updated_at)
+            VALUES (?, ?, 0, 0, ?, ?)
+            ON CONFLICT(thread_id, session_id) DO NOTHING
+          `).run(threadId, sessionID, now, now);
+      }
+      this.touchThread(threadId);
+    });
   }
 
   markRead(threadId: string, sessionID: string, seq: number): RelayThreadParticipant {
@@ -203,17 +224,19 @@ export class ThreadStore {
     createdBySessionID: string;
     participantSessionIDs: string[];
   }): RelayThread {
-    const now = Date.now();
-    const threadId = createThreadId();
-    const uniqueParticipants = [...new Set(input.participantSessionIDs)];
+    return this.database.transaction(() => {
+      const now = Date.now();
+      const threadId = createThreadId();
+      const uniqueParticipants = [...new Set(input.participantSessionIDs)];
 
-    this.database.prepare(`INSERT INTO relay_threads (thread_id, room_code, kind, title, direct_key, created_by_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(threadId, input.roomCode, input.kind, input.title ?? null, input.directKey ?? null, input.createdBySessionID, now, now);
+      this.database.prepare(`INSERT INTO relay_threads (thread_id, room_code, kind, title, direct_key, created_by_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(threadId, input.roomCode, input.kind, input.title ?? null, input.directKey ?? null, input.createdBySessionID, now, now);
 
-    for (const sessionID of uniqueParticipants) {
-      this.database.prepare(`INSERT INTO relay_thread_participants (thread_id, session_id, last_read_seq, last_notified_seq, joined_at, updated_at) VALUES (?, ?, 0, 0, ?, ?)`).run(threadId, sessionID, now, now);
-    }
+      for (const sessionID of uniqueParticipants) {
+        this.database.prepare(`INSERT INTO relay_thread_participants (thread_id, session_id, last_read_seq, last_notified_seq, joined_at, updated_at) VALUES (?, ?, 0, 0, ?, ?)`).run(threadId, sessionID, now, now);
+      }
 
-    return this.getThread(threadId)!;
+      return this.getThread(threadId)!;
+    });
   }
 
   private requireParticipant(threadId: string, sessionID: string): RelayThreadParticipant {

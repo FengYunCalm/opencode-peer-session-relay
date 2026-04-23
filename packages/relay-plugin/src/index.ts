@@ -96,7 +96,7 @@ function applyRelaySessionDefaults(toolID: string, args: Record<string, unknown>
 export const RelayPlugin: Plugin = async (input, options) => {
   const config = resolveRelayPluginConfig(options);
   const projectKey = input.project.id;
-  const instanceKey = buildRelayPluginInstanceKey(config);
+  const instanceKey = buildRelayPluginInstanceKey(config, projectKey);
 
   let state: RelayPluginState | undefined = readRelayPluginState(instanceKey);
 
@@ -294,7 +294,7 @@ export const RelayPlugin: Plugin = async (input, options) => {
         afterSeq: tool.schema.number().int().nonnegative().optional(),
         limit: tool.schema.number().int().positive().optional()
       },
-      execute: async ({ threadId, afterSeq, limit }) => JSON.stringify(state.runtime.listMessages(threadId, afterSeq, limit), null, 2)
+      execute: async ({ threadId, afterSeq, limit }, context) => JSON.stringify(state.runtime.listMessages(threadId, afterSeq, limit, context.sessionID), null, 2)
     }),
     relay_message_send: tool({
       description: "Append a durable message into a relay thread",
@@ -333,7 +333,7 @@ export const RelayPlugin: Plugin = async (input, options) => {
       args: {
         threadId: tool.schema.string().min(1)
       },
-      execute: async ({ threadId }) => JSON.stringify(state.runtime.exportTranscript(threadId), null, 2)
+      execute: async ({ threadId }, context) => JSON.stringify(state.runtime.exportTranscript(threadId, context.sessionID), null, 2)
     }),
     relay_team_start: tool({
       description: "Create a relay-backed workflow team from the current session and bootstrap the default worker sessions",

@@ -6,6 +6,7 @@ import { z } from "zod";
 const a2aConfigSchema = z.object({
   enabled: z.boolean().default(true),
   host: z.string().min(1).default("127.0.0.1"),
+  allowRemoteAccess: z.boolean().default(false),
   port: z.number().int().min(0).max(65535).default(7331),
   basePath: z.string().startsWith("/").default("/a2a"),
   healthPath: z.string().startsWith("/").default("/health"),
@@ -135,9 +136,11 @@ export function resolveRelayPluginConfig(input?: unknown): RelayPluginConfig {
   return relayPluginConfigSchema.parse(merged);
 }
 
-export function buildRelayPluginInstanceKey(config: RelayPluginConfig): string {
+export function buildRelayPluginInstanceKey(config: RelayPluginConfig, projectID: string): string {
   return [
+    projectID,
     config.a2a.host,
+    String(config.a2a.allowRemoteAccess),
     String(config.a2a.port),
     config.a2a.basePath,
     config.runtime.databasePath ?? "__default_db__"

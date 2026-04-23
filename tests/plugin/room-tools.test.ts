@@ -28,6 +28,9 @@ function createPluginInput(projectID = "project-room-tools", promptAsync = vi.fn
 
 afterEach(async () => {
   await stopRelayPlugin("project-room-tools");
+  await stopRelayPlugin("project-room-tools-rejoin");
+  await stopRelayPlugin("project-room-tools-private-thread-send");
+  await stopRelayPlugin("project-room-tools-status-multiroom");
   dbLocations.splice(0).forEach(cleanupDatabaseLocation);
 });
 
@@ -226,6 +229,108 @@ describe("relay room tools", () => {
         ]
       }
     });
+  });
+
+  it("revokes the replaced private-room peer from thread reads and writes", async () => {
+    const databasePath = createTestDatabaseLocation("room-tools-private-revoke");
+    dbLocations.push(databasePath);
+    const hooks = await RelayPlugin(createPluginInput("project-room-tools-rejoin"), {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const created = await hooks.tool?.relay_room_create.execute({}, {
+      sessionID: "session-owner",
+      messageID: "message-a",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+    const roomCode = created?.match(/Room code: (\d{6})/)?.[1]!;
+
+    await hooks.tool?.relay_room_join.execute({ roomCode }, {
+      sessionID: "session-old",
+      messageID: "message-b",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    const originalThreads = JSON.parse(await hooks.tool?.relay_thread_list.execute({ scope: "session" }, {
+      sessionID: "session-old",
+      messageID: "message-c",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    }) as string) as Array<{ threadId: string; kind: string }>;
+    const oldThreadId = originalThreads.find((thread) => thread.kind === "direct")?.threadId;
+
+    await hooks.tool?.relay_room_join.execute({ roomCode }, {
+      sessionID: "session-new",
+      messageID: "message-d",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    const visibleThreads = JSON.parse(await hooks.tool?.relay_thread_list.execute({ scope: "session" }, {
+      sessionID: "session-old",
+      messageID: "message-e",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    }) as string) as Array<{ threadId: string }>;
+
+    expect(visibleThreads).toEqual([]);
+
+    await expect(hooks.tool?.relay_message_list.execute({ threadId: oldThreadId! }, {
+      sessionID: "session-old",
+      messageID: "message-f",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    })).rejects.toThrow(/not an active member|not part of thread/i);
+
+    await expect(hooks.tool?.relay_transcript_export.execute({ threadId: oldThreadId! }, {
+      sessionID: "session-old",
+      messageID: "message-g",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    })).rejects.toThrow(/not an active member|not part of thread/i);
+
+    await expect(hooks.tool?.relay_message_send.execute({ threadId: oldThreadId!, message: "still here" }, {
+      sessionID: "session-old",
+      messageID: "message-h",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    })).rejects.toThrow(/not allowed|not part of thread/i);
   });
 
   it("shows the correct private-room peer even when the same owner is also in a group room", async () => {

@@ -38,4 +38,4 @@ export { createRelayPluginState } from "../../packages/relay-plugin/src/runtime/
 export { ResponseObserver } from "../../packages/relay-plugin/src/runtime/response-observer.ts";
 export { SessionRegistry } from "../../packages/relay-plugin/src/runtime/session-registry.ts";
 export { buildTaskRelayPrompt, buildThreadRelayPrompt } from "../../packages/relay-plugin/src/runtime/prompt-preamble.ts";
-export { createRelayBridgeMcpServer, standaloneCompatToolNames } from "../../packages/relay-plugin/src/relay-mcp-server.ts";
+export { createRelayBridgeMcpServer, resolveCompatDatabasePath, standaloneCompatToolNames } from "../../packages/relay-plugin/src/relay-mcp-server.ts";

@@ -179,7 +179,11 @@ export class RelayRoomOrchestrator {
       return this.threadStore.listThreadsForRoom(options.roomCode).map((thread) => this.decorateThread(thread));
     }
     if (options.sessionID) {
+      const activeRoomCodes = new Set(this.roomStore.listRoomsBySession(options.sessionID).map((room) => room.roomCode));
       return this.threadStore.listThreadsForSession(options.sessionID).map(({ participant, ...thread }) => ({
+        ...thread,
+        participant
+      })).filter((thread) => activeRoomCodes.has(thread.roomCode)).map(({ participant, ...thread }) => ({
         ...this.decorateThread(thread),
         participant
       }));
@@ -187,16 +191,20 @@ export class RelayRoomOrchestrator {
     return [];
   }
 
-  listMessages(threadId: string, afterSeq = 0, limit = 100): RelayMessage[] {
+  listMessages(threadId: string, afterSeq = 0, limit = 100, sessionID?: string): RelayMessage[] {
+    if (sessionID) {
+      this.requireThreadAccess(threadId, sessionID);
+    }
     return this.messageStore.listMessages(threadId, afterSeq, limit);
   }
 
   markThreadRead(threadId: string, sessionID: string, seq: number): unknown {
+    this.requireThreadAccess(threadId, sessionID);
     return this.threadStore.markRead(threadId, sessionID, seq);
   }
 
-  exportTranscript(threadId: string): unknown {
-    const thread = this.threadStore.getThread(threadId);
+  exportTranscript(threadId: string, sessionID?: string): unknown {
+    const thread = sessionID ? this.requireThreadAccess(threadId, sessionID) : this.threadStore.getThread(threadId);
     if (!thread) {
       throw new Error(`Thread ${threadId} does not exist.`);
     }
@@ -304,15 +312,18 @@ export class RelayRoomOrchestrator {
     peerSessionID: string;
     message: string;
   }): Promise<SendThreadMessageResult> {
-    const message = this.messageStore.appendMessage({
-      threadId: input.threadId,
-      senderSessionID: input.sourceSessionID,
-      messageType: "relay",
-      body: { text: input.message }
+    const message = this.messageStore.transaction(() => {
+      const storedMessage = this.messageStore.appendMessage({
+        threadId: input.threadId,
+        senderSessionID: input.sourceSessionID,
+        messageType: "relay",
+        body: { text: input.message }
+      });
+      this.threadStore.touchThread(input.threadId);
+      this.threadStore.markRead(input.threadId, input.sourceSessionID, storedMessage.seq);
+      this.threadStore.markNotified(input.threadId, input.sourceSessionID, storedMessage.seq);
+      return storedMessage;
     });
-    this.threadStore.touchThread(input.threadId);
-    this.threadStore.markRead(input.threadId, input.sourceSessionID, message.seq);
-    this.threadStore.markNotified(input.threadId, input.sourceSessionID, message.seq);
 
     const queuedRecipients: Array<{ sessionID: string; reason: string }> = [];
     const notifiedRecipients: string[] = [];
@@ -373,7 +384,8 @@ export class RelayRoomOrchestrator {
       throw new Error(`Sender ${input.senderSessionID} is not part of thread ${input.threadId}.`);
     }
 
-    const senderRole = this.roomStore.getMember(thread.roomCode, input.senderSessionID)?.role;
+    const senderMember = this.roomStore.getMember(thread.roomCode, input.senderSessionID);
+    const senderRole = senderMember?.membershipStatus === "active" ? senderMember.role : undefined;
     if (!senderRole || senderRole === "observer") {
       throw new Error(`Session ${input.senderSessionID} is not allowed to send messages in thread ${input.threadId}.`);
     }
@@ -404,15 +416,18 @@ export class RelayRoomOrchestrator {
       });
     }
 
-    const message = this.messageStore.appendMessage({
-      threadId: input.threadId,
-      senderSessionID: input.senderSessionID,
-      messageType: input.messageType ?? "relay",
-      body: { text: input.message }
+    const message = this.messageStore.transaction(() => {
+      const storedMessage = this.messageStore.appendMessage({
+        threadId: input.threadId,
+        senderSessionID: input.senderSessionID,
+        messageType: input.messageType ?? "relay",
+        body: { text: input.message }
+      });
+      this.threadStore.touchThread(input.threadId);
+      this.threadStore.markRead(input.threadId, input.senderSessionID, storedMessage.seq);
+      this.threadStore.markNotified(input.threadId, input.senderSessionID, storedMessage.seq);
+      return storedMessage;
     });
-    this.threadStore.touchThread(input.threadId);
-    this.threadStore.markRead(input.threadId, input.senderSessionID, message.seq);
-    this.threadStore.markNotified(input.threadId, input.senderSessionID, message.seq);
 
     const queuedRecipients: Array<{ sessionID: string; reason: string }> = [];
     const notifiedRecipients: string[] = [];
@@ -482,5 +497,24 @@ export class RelayRoomOrchestrator {
       latestSeq: this.messageStore.getLatestSeq(thread.threadId),
       participantCount: this.threadStore.listParticipants(thread.threadId).length
     };
+  }
+
+  private requireThreadAccess(threadId: string, sessionID: string): RelayThread {
+    const thread = this.threadStore.getThread(threadId);
+    if (!thread) {
+      throw new Error(`Thread ${threadId} does not exist.`);
+    }
+
+    const participant = this.threadStore.getParticipant(threadId, sessionID);
+    if (!participant) {
+      throw new Error(`Session ${sessionID} is not part of thread ${threadId}.`);
+    }
+
+    const member = this.roomStore.getMember(thread.roomCode, sessionID);
+    if (!member || member.membershipStatus !== "active") {
+      throw new Error(`Session ${sessionID} is not an active member of room ${thread.roomCode}.`);
+    }
+
+    return thread;
   }
 }

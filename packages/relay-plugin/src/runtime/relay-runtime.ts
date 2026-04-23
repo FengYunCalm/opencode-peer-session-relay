@@ -131,6 +131,20 @@ function isTaskForSession(task: StoredRelayTask, sessionID: string): boolean {
   return task.metadata.sessionID === sessionID;
 }
 
+function getAcceptedDispatchSessionID(task: StoredRelayTask): string | undefined {
+  return typeof task.metadata.relayDispatchSessionID === "string"
+    ? task.metadata.relayDispatchSessionID
+    : undefined;
+}
+
+function isTaskDispatchAccepted(task: StoredRelayTask, sessionID?: string): boolean {
+  const acceptedSessionID = getAcceptedDispatchSessionID(task);
+  if (!acceptedSessionID) {
+    return false;
+  }
+  return sessionID ? acceptedSessionID === sessionID : true;
+}
+
 function sanitizePart(part: Part): Part {
   return { ...part, metadata: {} };
 }
@@ -180,6 +194,7 @@ export class RelayRuntime {
   readonly sessionRegistry: SessionRegistry;
   readonly relayOrchestrator: RelayRoomOrchestrator;
 
+  private readonly inFlightTaskDispatches = new Set<string>();
   private readonly inFlightThreadNotificationKeys = new Set<string>();
 
   private readonly sendMessage;
@@ -308,21 +323,41 @@ export class RelayRuntime {
   }
 
   joinRoom(roomCode: string, sessionID: string, alias?: string): RelayRoom {
-    const room = this.relayOrchestrator.joinRoom(roomCode, sessionID, alias);
-    const worker = this.teamStore.markWorkerJoined(sessionID, room.roomCode, alias);
-    if (worker) {
-      this.auditStore.append(worker.runId, "team.worker.joined", {
-        sessionID,
-        alias: worker.alias,
-        role: worker.role,
-        roomCode: room.roomCode
-      });
-    }
-    return room;
+    return this.roomStore.transaction(() => {
+      const room = this.relayOrchestrator.joinRoom(roomCode, sessionID, alias);
+      const worker = this.teamStore.markWorkerJoined(sessionID, room.roomCode, alias);
+      if (worker) {
+        this.auditStore.append(worker.runId, "team.worker.joined", {
+          sessionID,
+          alias: worker.alias,
+          role: worker.role,
+          roomCode: room.roomCode
+        });
+      }
+      return room;
+    });
   }
 
   async onSessionStatus(sessionID: string, status: SessionStatus): Promise<void> {
     this.sessionRegistry.upsert({ sessionID, status, updatedAt: Date.now() });
+
+    const acceptedTask = this.taskStore
+      .listActiveTasks()
+      .filter((task) => task.status === "submitted" && isTaskDispatchAccepted(task, sessionID))
+      .sort((left, right) => left.updatedAt - right.updatedAt)[0];
+
+    if (status.type !== "idle") {
+      if (acceptedTask) {
+        this.taskStore.transaction(() => {
+          this.observer.updateStatus(acceptedTask.taskId, "working");
+          this.taskStore.mergeMetadata(acceptedTask.taskId, {
+            relayDispatchSessionID: undefined,
+            relayDispatchAcceptedAt: undefined
+          });
+        });
+      }
+      return;
+    }
 
     if (status.type === "idle" && !this.humanGuard.isPaused(sessionID)) {
       const notified = await this.notifyPendingMessages(sessionID);
@@ -333,15 +368,13 @@ export class RelayRuntime {
 
     const nextTask = this.taskStore
       .listActiveTasks()
-      .filter((task) => task.status === "submitted" && isTaskForSession(task, sessionID))
+      .filter((task) => (
+        task.status === "submitted"
+        && isTaskForSession(task, sessionID)
+        && !isTaskDispatchAccepted(task)
+        && !this.inFlightTaskDispatches.has(task.taskId)
+      ))
       .sort((left, right) => left.updatedAt - right.updatedAt)[0];
-
-    if (status.type !== "idle") {
-      if (nextTask) {
-        this.observer.updateStatus(nextTask.taskId, "working");
-      }
-      return;
-    }
 
     if (this.humanGuard.isPaused(sessionID) || !nextTask) {
       return;
@@ -360,21 +393,23 @@ export class RelayRuntime {
     const result = await this.relayOrchestrator.sendRoomMessage(sourceSessionID, message, targetAlias, roomCode);
     const signal = classifyRelayWorkflowSignal(message);
     if (signal.matched && signal.accepted) {
-      const worker = this.teamStore.markWorkerSignal(sourceSessionID, result.roomCode, signal);
-      if (worker) {
-        this.auditStore.append(worker.runId, `team.worker.${signal.status}`, {
-          sessionID: sourceSessionID,
-          role: worker.role,
-          alias: worker.alias,
-          roomCode: result.roomCode,
-          note: signal.note,
-          source: signal.source,
-          phase: signal.phase,
-          progress: signal.progress,
-          evidence: signal.evidence,
-          metadata: signal.metadata ?? {}
-        });
-      }
+      this.teamStore.transaction(() => {
+        const worker = this.teamStore.markWorkerSignal(sourceSessionID, result.roomCode, signal);
+        if (worker) {
+          this.auditStore.append(worker.runId, `team.worker.${signal.status}`, {
+            sessionID: sourceSessionID,
+            role: worker.role,
+            alias: worker.alias,
+            roomCode: result.roomCode,
+            note: signal.note,
+            source: signal.source,
+            phase: signal.phase,
+            progress: signal.progress,
+            evidence: signal.evidence,
+            metadata: signal.metadata ?? {}
+          });
+        }
+      });
     } else if (signal.matched) {
       const run = this.teamStore.getRunForSession(sourceSessionID, result.roomCode);
       if (run) {
@@ -633,8 +668,15 @@ export class RelayRuntime {
       throw new Error(`Task ${taskId} is not replayable from status ${existing.status}.`);
     }
 
-    const replayed = this.taskStore.updateStatus(taskId, "submitted", existing.latestMessage);
-    this.auditStore.append(taskId, "task.replayed", {});
+    const replayed = this.taskStore.transaction(() => {
+      this.taskStore.updateStatus(taskId, "submitted", existing.latestMessage);
+      const nextTask = this.taskStore.mergeMetadata(taskId, {
+        relayDispatchSessionID: undefined,
+        relayDispatchAcceptedAt: undefined
+      });
+      this.auditStore.append(taskId, "task.replayed", {});
+      return nextTask;
+    });
     this.eventHub.emit(taskId, mapTaskStatusEvent(replayed));
 
     const sessionID = this.sessionLinkStore.getSessionID(taskId) ?? (typeof replayed.metadata.sessionID === "string" ? replayed.metadata.sessionID : undefined);
@@ -670,16 +712,16 @@ export class RelayRuntime {
     return this.relayOrchestrator.createThread(input);
   }
 
-  listMessages(threadId: string, afterSeq = 0, limit = 100): RelayMessage[] {
-    return this.relayOrchestrator.listMessages(threadId, afterSeq, limit);
+  listMessages(threadId: string, afterSeq = 0, limit = 100, sessionID?: string): RelayMessage[] {
+    return this.relayOrchestrator.listMessages(threadId, afterSeq, limit, sessionID);
   }
 
   markThreadRead(threadId: string, sessionID: string, seq: number): unknown {
     return this.relayOrchestrator.markThreadRead(threadId, sessionID, seq);
   }
 
-  exportTranscript(threadId: string): unknown {
-    return this.relayOrchestrator.exportTranscript(threadId);
+  exportTranscript(threadId: string, sessionID?: string): unknown {
+    return this.relayOrchestrator.exportTranscript(threadId, sessionID);
   }
 
   async sendThreadMessage(input: {
@@ -713,6 +755,12 @@ export class RelayRuntime {
       return { sessionID };
     }
 
+    if (this.inFlightTaskDispatches.has(task.taskId) || isTaskDispatchAccepted(task, sessionID)) {
+      return { sessionID };
+    }
+
+    this.inFlightTaskDispatches.add(task.taskId);
+
     try {
       const requestMessage = task.history[0];
       const content = requestMessage ? renderMessagePart(requestMessage) : "";
@@ -729,16 +777,22 @@ export class RelayRuntime {
         targetSessionID: sessionID,
         result: "ok"
       });
-      this.observer.accept(task.taskId, sessionID);
-      this.auditStore.append(task.taskId, "task.dispatched", { sessionID });
+      this.taskStore.transaction(() => {
+        this.observer.accept(task.taskId, sessionID);
+        this.auditStore.append(task.taskId, "task.dispatched", { sessionID });
+      });
       return { sessionID };
     } catch (error) {
-      this.auditStore.append(task.taskId, "task.dispatch_failed", {
-        sessionID,
-        message: error instanceof Error ? error.message : "unknown error"
+      this.taskStore.transaction(() => {
+        this.auditStore.append(task.taskId, "task.dispatch_failed", {
+          sessionID,
+          message: error instanceof Error ? error.message : "unknown error"
+        });
+        this.taskStore.updateStatus(task.taskId, "failed");
       });
-      this.taskStore.updateStatus(task.taskId, "failed");
       throw error;
+    } finally {
+      this.inFlightTaskDispatches.delete(task.taskId);
     }
   }
 

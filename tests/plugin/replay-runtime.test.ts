@@ -101,4 +101,83 @@ describe("relay runtime replay", () => {
 
     expect(state.runtime.taskStore.getTask(createdTask.taskId)?.status).toBe("working");
   });
+
+  it("does not redispatch the same submitted task across repeated idle events", async () => {
+    const databasePath = createTestDatabaseLocation("replay-runtime-repeated-idle");
+    dbLocations.push(databasePath);
+
+    let resolvePrompt: ((value: { data: true }) => void) | undefined;
+    const promptAsync = vi.fn().mockImplementation(
+      () => new Promise<{ data: true }>((resolve) => {
+        resolvePrompt = resolve;
+      })
+    );
+
+    const hooks = await RelayPlugin(createPluginInput("project-replay-runtime", promptAsync), {
+      a2a: { port: 0 },
+      runtime: { databasePath }
+    });
+
+    const state = getRelayPluginStateForTest("project-replay-runtime")!;
+    state.runtime.taskStore.createTask({
+      taskId: "task-replay-race",
+      requestMessage: {
+        messageId: "msg-replay-race",
+        role: "user",
+        parts: [{ text: "redo this once", metadata: {} }],
+        metadata: {}
+      },
+      status: "submitted",
+      metadata: { sessionID: "session-replay-race" }
+    });
+
+    const firstIdle = hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "session-replay-race",
+          status: { type: "idle" }
+        }
+      } as never
+    });
+    const secondIdle = hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "session-replay-race",
+          status: { type: "idle" }
+        }
+      } as never
+    });
+
+    await Promise.resolve();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    resolvePrompt?.({ data: true });
+    await Promise.all([firstIdle, secondIdle]);
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "session-replay-race",
+          status: { type: "idle" }
+        }
+      } as never
+    });
+
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: {
+          sessionID: "session-replay-race",
+          status: { type: "busy" }
+        }
+      } as never
+    });
+
+    expect(state.runtime.taskStore.getTask("task-replay-race")?.status).toBe("working");
+  });
 });

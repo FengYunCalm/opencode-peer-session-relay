@@ -88,4 +88,57 @@ describe("send message stream handler", () => {
     expect(completed.value?.type).toBe("task-status-update");
     expect(done.done).toBe(true);
   });
+
+  it("reattaches duplicate stream requests to the existing task stream", async () => {
+    const location = createTestDatabaseLocation("send-message-stream-duplicate");
+    dbLocations.push(location);
+    const taskStore = new TaskStore(location);
+    const auditStore = new AuditStore(location);
+    const sessionLinkStore = new SessionLinkStore(location);
+    const eventHub = new TaskEventHub();
+    const observer = new ResponseObserver(taskStore, auditStore, sessionLinkStore, eventHub);
+
+    const handler = createSendMessageStreamHandler(
+      {
+        taskStore,
+        auditStore,
+        sessionLinkStore,
+        eventHub,
+        executor: {
+          dispatch: async () => ({ sessionID: "session-1" })
+        }
+      },
+      eventHub
+    );
+
+    const request = {
+      jsonrpc: "2.0" as const,
+      id: "req-dup",
+      method: "sendMessage",
+      params: {
+        sessionID: "session-1",
+        message: {
+          messageId: "msg-dup",
+          role: "user" as const,
+          parts: [{ text: "hello", metadata: {} }],
+          metadata: {}
+        }
+      }
+    };
+
+    const first = await handler(request);
+    const duplicate = await handler(request);
+
+    expect(duplicate.task.taskId).toBe(first.task.taskId);
+
+    const stream = duplicate.events[Symbol.asyncIterator]();
+    observer.updateStatus(first.task.taskId, "completed");
+
+    const completed = await stream.next();
+    const done = await stream.next();
+
+    expect(completed.value?.type).toBe("task-status-update");
+    expect(completed.value?.status).toBe("completed");
+    expect(done.done).toBe(true);
+  });
 });

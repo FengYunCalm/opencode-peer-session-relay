@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -37,8 +40,24 @@ export const standaloneCompatToolNames = [
   "compat_transcript_export"
 ] as const;
 
-function resolveDatabasePath(): string {
-  return process.env.RELAY_MCP_DATABASE_PATH || process.env.RELAY_DATABASE_PATH || "C:\\Users\\MECHREVO\\.config\\opencode\\plugins\\opencode-a2a-relay.sqlite";
+export function resolveCompatDatabasePath(): string {
+  if (process.env.RELAY_MCP_DATABASE_PATH) {
+    return process.env.RELAY_MCP_DATABASE_PATH;
+  }
+
+  if (process.env.RELAY_DATABASE_PATH) {
+    return process.env.RELAY_DATABASE_PATH;
+  }
+
+  if (process.env.XDG_CONFIG_HOME) {
+    return join(process.env.XDG_CONFIG_HOME, "opencode", "plugins", "opencode-a2a-relay.sqlite");
+  }
+
+  if (process.platform === "win32" && process.env.APPDATA) {
+    return join(process.env.APPDATA, "opencode", "plugins", "opencode-a2a-relay.sqlite");
+  }
+
+  return join(homedir(), ".config", "opencode", "plugins", "opencode-a2a-relay.sqlite");
 }
 
 class RelayMcpService {
@@ -141,7 +160,7 @@ class RelayMcpService {
 }
 
 export function createRelayBridgeMcpServer() {
-  const dbPath = resolveDatabasePath();
+  const dbPath = resolveCompatDatabasePath();
   const service = new RelayMcpService(dbPath);
   const mcp = new McpServer({ name: "relay", version: "0.1.0" });
 

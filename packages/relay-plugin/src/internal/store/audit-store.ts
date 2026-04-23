@@ -17,6 +17,10 @@ export class AuditStore {
     initializeRelaySchema(this.database);
   }
 
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
+  }
+
   append(taskId: string, eventType: string, payload: Record<string, unknown>): AuditEventRecord {
     const createdAt = Date.now();
     const result = this.database

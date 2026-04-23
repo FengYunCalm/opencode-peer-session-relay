@@ -53,26 +53,30 @@ async function createAndDispatchTask(
   const paused = dependencies.humanGuard?.isPaused(request.sessionID) ?? false;
   const status: TaskStatus = paused ? "input-required" : "submitted";
 
-  const task = dependencies.taskStore.createTask({
-    taskId,
-    contextId: request.contextId,
-    requestMessage: request.message,
-    status,
-    metadata: {
-      ...request.metadata,
+  const task = dependencies.taskStore.transaction(() => {
+    const createdTask = dependencies.taskStore.createTask({
+      taskId,
+      contextId: request.contextId,
+      requestMessage: request.message,
+      status,
+      metadata: {
+        ...request.metadata,
+        requestId: request.requestId,
+        sourceSessionID: request.sourceSessionID,
+        pauseReason: paused ? dependencies.humanGuard?.reason(request.sessionID) : undefined,
+        sessionID: request.sessionID
+      },
+      dedupeKey
+    });
+
+    dependencies.auditStore.append(taskId, "task.created", {
       requestId: request.requestId,
       sourceSessionID: request.sourceSessionID,
-      pauseReason: paused ? dependencies.humanGuard?.reason(request.sessionID) : undefined,
+      paused,
       sessionID: request.sessionID
-    },
-    dedupeKey
-  });
+    });
 
-  dependencies.auditStore.append(taskId, "task.created", {
-    requestId: request.requestId,
-    sourceSessionID: request.sourceSessionID,
-    paused,
-    sessionID: request.sessionID
+    return createdTask;
   });
   dependencies.eventHub?.emit(taskId, mapTaskStatusEvent(task));
 
@@ -82,8 +86,10 @@ async function createAndDispatchTask(
 
   const dispatchResult = await dependencies.executor.dispatch({ ...request, taskId });
   if (dispatchResult.sessionID) {
-    dependencies.sessionLinkStore.link(taskId, dispatchResult.sessionID);
-    return dependencies.taskStore.mergeMetadata(taskId, { sessionID: dispatchResult.sessionID });
+    return dependencies.taskStore.transaction(() => {
+      dependencies.sessionLinkStore.link(taskId, dispatchResult.sessionID!);
+      return dependencies.taskStore.mergeMetadata(taskId, { sessionID: dispatchResult.sessionID });
+    });
   }
 
   return task;

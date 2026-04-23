@@ -1,5 +1,5 @@
 import { initializeRelaySchema } from "./schema.js";
-import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
+import { isRetryableSqliteError, openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
 export type RelayRoomKind = "private" | "group";
 export type RelayRoomStatus = "open" | "active";
@@ -56,12 +56,21 @@ function normalizeAlias(alias: string): string {
   return alias.trim().toLocaleLowerCase();
 }
 
+function shouldRetryRoomMutation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return isRetryableSqliteError(error) || message.includes("unique") || message.includes("constraint");
+}
+
 export class RoomStore {
   private readonly database: SqliteDatabase;
 
   constructor(location = ":memory:") {
     this.database = openSqliteDatabase(location);
     initializeRelaySchema(this.database);
+  }
+
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
   }
 
   createRoom(sessionID: string, kind: RelayRoomKind = "private"): RelayRoom {
@@ -75,13 +84,18 @@ export class RoomStore {
       const now = Date.now();
 
       try {
-        this.database
-          .prepare(`INSERT INTO relay_rooms (room_code, room_kind, created_by_session_id, joined_session_id, status, created_at, joined_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(roomCode, kind, sessionID, null, "open", now, null, now);
-        this.upsertMember(roomCode, sessionID, sessionID, "owner", now);
-        return this.getRoom(roomCode)!;
-      } catch {
-        // retry on collision
+        return this.database.transaction(() => {
+          this.database
+            .prepare(`INSERT INTO relay_rooms (room_code, room_kind, created_by_session_id, joined_session_id, status, created_at, joined_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(roomCode, kind, sessionID, null, "open", now, null, now);
+          this.upsertMember(roomCode, sessionID, sessionID, "owner", now);
+          return this.getRoom(roomCode)!;
+        });
+      } catch (error) {
+        if (attempt < 19 && shouldRetryRoomMutation(error)) {
+          continue;
+        }
+        throw error;
       }
     }
 
@@ -89,45 +103,47 @@ export class RoomStore {
   }
 
   joinRoom(roomCode: string, sessionID: string, alias?: string): RelayRoom {
-    const room = this.getRoom(roomCode);
-    if (!room) {
-      throw new Error(`Room ${roomCode} does not exist.`);
-    }
+    return this.database.transaction(() => {
+      const room = this.getRoom(roomCode);
+      if (!room) {
+        throw new Error(`Room ${roomCode} does not exist.`);
+      }
 
-    const now = Date.now();
-    const existingMember = this.getMember(roomCode, sessionID);
-    if (existingMember?.membershipStatus === "active") {
-      return room;
-    }
+      const now = Date.now();
+      const existingMember = this.getMember(roomCode, sessionID);
+      if (existingMember?.membershipStatus === "active") {
+        return room;
+      }
 
-    if (room.kind === "private") {
+      if (room.kind === "private") {
+        this.database
+          .prepare(`
+            UPDATE relay_room_members
+            SET membership_status = 'removed', updated_at = ?
+            WHERE room_code = ? AND session_id != ? AND role != 'owner' AND membership_status = 'active'
+          `)
+          .run(now, roomCode, sessionID);
+      }
+
+      const memberAlias = room.kind === "group" ? alias?.trim() : undefined;
+      if (room.kind === "group" && !memberAlias) {
+        throw new Error("Joining a group room requires an alias.");
+      }
+
+      this.ensureAliasAvailable(roomCode, memberAlias, sessionID);
+      this.upsertMember(roomCode, sessionID, memberAlias ?? sessionID, "member", now);
+
+      const activeMembers = this.listMembers(roomCode);
+      const firstJoinedPeer = activeMembers
+        .filter((member) => member.role !== "owner")
+        .sort((left, right) => left.joinedAt - right.joinedAt)[0];
+
       this.database
-        .prepare(`
-          UPDATE relay_room_members
-          SET membership_status = 'removed', updated_at = ?
-          WHERE room_code = ? AND session_id != ? AND role != 'owner' AND membership_status = 'active'
-        `)
-        .run(now, roomCode, sessionID);
-    }
+        .prepare(`UPDATE relay_rooms SET joined_session_id = ?, status = ?, joined_at = COALESCE(joined_at, ?), updated_at = ? WHERE room_code = ?`)
+        .run(firstJoinedPeer?.sessionID ?? null, activeMembers.length > 1 ? "active" : "open", now, now, roomCode);
 
-    const memberAlias = room.kind === "group" ? alias?.trim() : undefined;
-    if (room.kind === "group" && !memberAlias) {
-      throw new Error("Joining a group room requires an alias.");
-    }
-
-    this.ensureAliasAvailable(roomCode, memberAlias, sessionID);
-    this.upsertMember(roomCode, sessionID, memberAlias ?? sessionID, "member", now);
-
-    const activeMembers = this.listMembers(roomCode);
-    const firstJoinedPeer = activeMembers
-      .filter((member) => member.role !== "owner")
-      .sort((left, right) => left.joinedAt - right.joinedAt)[0];
-
-    this.database
-      .prepare(`UPDATE relay_rooms SET joined_session_id = ?, status = ?, joined_at = COALESCE(joined_at, ?), updated_at = ? WHERE room_code = ?`)
-      .run(firstJoinedPeer?.sessionID ?? null, activeMembers.length > 1 ? "active" : "open", now, now, roomCode);
-
-    return this.getRoom(roomCode)!;
+      return this.getRoom(roomCode)!;
+    });
   }
 
   setMemberRole(roomCode: string, sessionID: string, role: RelayRoomMemberRole): RelayRoomMember {

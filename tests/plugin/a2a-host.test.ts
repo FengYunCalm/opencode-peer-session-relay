@@ -66,4 +66,11 @@ describe("A2A relay host", () => {
     expect(host.isListening).toBe(false);
     expect(host.port).toBeUndefined();
   });
+
+  it("rejects non-loopback bindings", async () => {
+    const config = resolveRelayPluginConfig({ a2a: { host: "0.0.0.0", port: 0 } });
+    const host = new A2ARelayHost(config.a2a);
+
+    await expect(host.start()).rejects.toThrow(/loopback/);
+  });
 });

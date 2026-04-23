@@ -36,23 +36,37 @@ function sanitizeArtifact(artifact: Artifact): Artifact {
 }
 
 export class TaskEventHub {
-  private readonly queues = new Map<string, QueueState>();
+  private readonly queues = new Map<string, Set<QueueState>>();
+
+  private detach(taskId: string, state: QueueState): void {
+    const states = this.queues.get(taskId);
+    if (!states) {
+      return;
+    }
+    states.delete(state);
+    if (states.size === 0) {
+      this.queues.delete(taskId);
+    }
+  }
 
   stream(taskId: string): AsyncIterable<TaskEvent> {
+    const hub = this;
     const state: QueueState = { queue: [], closed: false };
-    this.queues.set(taskId, state);
+    const states = this.queues.get(taskId) ?? new Set<QueueState>();
+    states.add(state);
+    this.queues.set(taskId, states);
 
     const next = async (): Promise<IteratorResult<TaskEvent>> => {
       if (state.queue.length > 0) {
         const value = state.queue.shift()!;
         if (state.closed && state.queue.length === 0) {
-          this.queues.delete(taskId);
+          this.detach(taskId, state);
         }
         return { done: false, value };
       }
 
       if (state.closed) {
-        this.queues.delete(taskId);
+        this.detach(taskId, state);
         return { done: true, value: undefined };
       }
 
@@ -68,6 +82,9 @@ export class TaskEventHub {
           return: async () => {
             state.closed = true;
             state.waiter?.({ done: true, value: undefined });
+            state.waiter = undefined;
+            state.queue = [];
+            hub.detach(taskId, state);
             return { done: true, value: undefined };
           }
         };
@@ -76,24 +93,25 @@ export class TaskEventHub {
   }
 
   emit(taskId: string, event: TaskEvent): void {
-    const state = this.queues.get(taskId);
-
-    if (!state) {
+    const states = this.queues.get(taskId);
+    if (!states || states.size === 0) {
       return;
     }
 
     const isTerminal = event.type === "task-status-update" && ["completed", "failed", "canceled"].includes(event.status);
 
-    if (state.waiter) {
-      const waiter = state.waiter;
-      state.waiter = undefined;
-      waiter({ done: false, value: event });
-    } else {
-      state.queue.push(event);
-    }
+    for (const state of states) {
+      if (state.waiter) {
+        const waiter = state.waiter;
+        state.waiter = undefined;
+        waiter({ done: false, value: event });
+      } else {
+        state.queue.push(event);
+      }
 
-    if (isTerminal) {
-      state.closed = true;
+      if (isTerminal) {
+        state.closed = true;
+      }
     }
   }
 }

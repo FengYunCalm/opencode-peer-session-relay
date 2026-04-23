@@ -35,11 +35,17 @@ export type A2AHostCallbacks = {
 export type A2AHostConfig = {
   enabled: boolean;
   host: string;
+  allowRemoteAccess: boolean;
   port: number;
   basePath: string;
   healthPath: string;
   readyPath: string;
 };
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized.startsWith("127.");
+}
 
 export class A2ARelayHost {
   private server?: ReturnType<typeof createServer>;
@@ -69,6 +75,10 @@ export class A2ARelayHost {
   async start(): Promise<string> {
     if (!this.config.enabled) {
       throw new Error("A2A host is disabled by configuration.");
+    }
+
+    if (!this.config.allowRemoteAccess && !isLoopbackHost(this.config.host)) {
+      throw new Error(`A2A host must bind to loopback; received ${this.config.host}.`);
     }
 
     if (this.server && this.server.listening) {

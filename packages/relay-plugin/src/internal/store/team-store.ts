@@ -154,6 +154,10 @@ export class TeamStore {
     initializeRelaySchema(this.database);
   }
 
+  transaction<T>(callback: () => T): T {
+    return this.database.transaction(callback);
+  }
+
   createRun(input: { managerSessionID: string; roomCode: string; task: string }): RelayTeamRun {
     const now = Date.now();
     const runId = createRunId();
@@ -177,32 +181,34 @@ export class TeamStore {
     progress?: number;
     evidence?: unknown;
   }): RelayTeamWorker {
-    const now = Date.now();
-    this.database
-      .prepare(`
-        INSERT INTO relay_team_workers (run_id, session_id, role, alias, title, status, last_note, workflow_source, workflow_phase, progress, evidence_json, created_at, joined_at, ready_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        input.runId,
-        input.sessionID,
-        input.role,
-        input.alias,
-        input.title,
-        input.status ?? "created",
-        input.lastNote ?? null,
-        input.workflowSource ?? null,
-        input.workflowPhase ?? null,
-        input.progress ?? null,
-        serializeEvidence(input.evidence),
-        now,
-        null,
-        null,
-        now
-      );
+    return this.database.transaction(() => {
+      const now = Date.now();
+      this.database
+        .prepare(`
+          INSERT INTO relay_team_workers (run_id, session_id, role, alias, title, status, last_note, workflow_source, workflow_phase, progress, evidence_json, created_at, joined_at, ready_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          input.runId,
+          input.sessionID,
+          input.role,
+          input.alias,
+          input.title,
+          input.status ?? "created",
+          input.lastNote ?? null,
+          input.workflowSource ?? null,
+          input.workflowPhase ?? null,
+          input.progress ?? null,
+          serializeEvidence(input.evidence),
+          now,
+          null,
+          null,
+          now
+        );
 
-    this.refreshRunStatus(input.runId);
-    return this.requireWorker(input.runId, input.sessionID);
+      this.refreshRunStatus(input.runId);
+      return this.requireWorker(input.runId, input.sessionID);
+    });
   }
 
   getRun(runId: string): RelayTeamRun | undefined {
@@ -217,7 +223,29 @@ export class TeamStore {
 
   getRunForSession(sessionID: string, roomCode?: string, runId?: string): RelayTeamRun | undefined {
     if (runId) {
-      return this.getRun(runId);
+      const run = this.getRun(runId);
+      if (!run) {
+        return undefined;
+      }
+      if (roomCode && run.roomCode !== roomCode) {
+        return undefined;
+      }
+      if (run.managerSessionID === sessionID) {
+        return run;
+      }
+
+      const worker = this.database
+        .prepare(`
+          SELECT w.run_id
+          FROM relay_team_workers w
+          JOIN relay_team_runs r ON r.run_id = w.run_id
+          WHERE w.run_id = ? AND w.session_id = ?
+            AND (? IS NULL OR r.room_code = ?)
+          LIMIT 1
+        `)
+        .get(runId, sessionID, roomCode ?? null, roomCode ?? null) as { run_id: string } | undefined;
+
+      return worker ? run : undefined;
     }
 
     const byManager = this.database
@@ -330,32 +358,34 @@ export class TeamStore {
       return undefined;
     }
 
-    const worker = this.hydrateWorker(row);
-    const patch = mutate(worker);
-    const now = Date.now();
-    this.database
-      .prepare(`
-        UPDATE relay_team_workers
-        SET alias = ?, status = ?, last_note = ?, workflow_source = ?, workflow_phase = ?, progress = ?, evidence_json = ?, joined_at = ?, ready_at = ?, updated_at = ?
-        WHERE run_id = ? AND session_id = ?
-      `)
-      .run(
-        patch.alias ?? worker.alias,
-        patch.status ?? worker.status,
-        patch.lastNote ?? worker.lastNote ?? null,
-        patch.workflowSource ?? worker.workflowSource ?? null,
-        patch.workflowPhase ?? worker.workflowPhase ?? null,
-        patch.progress ?? worker.progress ?? null,
-        serializeEvidence(patch.evidence ?? worker.evidence),
-        patch.joinedAt ?? worker.joinedAt ?? null,
-        patch.readyAt ?? worker.readyAt ?? null,
-        now,
-        worker.runId,
-        worker.sessionID
-      );
+    return this.database.transaction(() => {
+      const worker = this.hydrateWorker(row);
+      const patch = mutate(worker);
+      const now = Date.now();
+      this.database
+        .prepare(`
+          UPDATE relay_team_workers
+          SET alias = ?, status = ?, last_note = ?, workflow_source = ?, workflow_phase = ?, progress = ?, evidence_json = ?, joined_at = ?, ready_at = ?, updated_at = ?
+          WHERE run_id = ? AND session_id = ?
+        `)
+        .run(
+          patch.alias ?? worker.alias,
+          patch.status ?? worker.status,
+          patch.lastNote ?? worker.lastNote ?? null,
+          patch.workflowSource ?? worker.workflowSource ?? null,
+          patch.workflowPhase ?? worker.workflowPhase ?? null,
+          patch.progress ?? worker.progress ?? null,
+          serializeEvidence(patch.evidence ?? worker.evidence),
+          patch.joinedAt ?? worker.joinedAt ?? null,
+          patch.readyAt ?? worker.readyAt ?? null,
+          now,
+          worker.runId,
+          worker.sessionID
+        );
 
-    this.refreshRunStatus(worker.runId);
-    return this.requireWorker(worker.runId, worker.sessionID);
+      this.refreshRunStatus(worker.runId);
+      return this.requireWorker(worker.runId, worker.sessionID);
+    });
   }
 
   private findWorkerRow(sessionID: string, roomCode?: string): RelayTeamWorkerLookupRow | undefined {

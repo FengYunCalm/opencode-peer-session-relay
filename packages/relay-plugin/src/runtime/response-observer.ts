@@ -14,23 +14,35 @@ export class ResponseObserver {
   ) {}
 
   accept(taskId: string, sessionID: string): StoredRelayTask {
-    this.sessionLinkStore.link(taskId, sessionID);
-    const task = this.taskStore.mergeMetadata(taskId, { sessionID });
-    this.auditStore.append(taskId, "task.accepted", { sessionID });
-    return task;
+    return this.taskStore.transaction(() => {
+      this.sessionLinkStore.link(taskId, sessionID);
+      const task = this.taskStore.mergeMetadata(taskId, {
+        sessionID,
+        relayDispatchSessionID: sessionID,
+        relayDispatchAcceptedAt: Date.now()
+      });
+      this.auditStore.append(taskId, "task.accepted", { sessionID });
+      return task;
+    });
   }
 
   updateStatus(taskId: string, status: TaskStatus, message?: Message): TaskEvent {
-    const task = this.taskStore.updateStatus(taskId, status, message);
-    this.auditStore.append(taskId, "task.status", { status });
+    const task = this.taskStore.transaction(() => {
+      const updatedTask = this.taskStore.updateStatus(taskId, status, message);
+      this.auditStore.append(taskId, "task.status", { status });
+      return updatedTask;
+    });
     const event = mapTaskStatusEvent(task);
     this.eventHub.emit(taskId, event);
     return event;
   }
 
   appendArtifact(taskId: string, artifact: Artifact, append = true): TaskEvent {
-    const task = this.taskStore.appendArtifact(taskId, artifact, append);
-    this.auditStore.append(taskId, "task.artifact", { artifactId: artifact.artifactId, append });
+    const task = this.taskStore.transaction(() => {
+      const updatedTask = this.taskStore.appendArtifact(taskId, artifact, append);
+      this.auditStore.append(taskId, "task.artifact", { artifactId: artifact.artifactId, append });
+      return updatedTask;
+    });
     const event = mapArtifactUpdateEvent(task.taskId, task.contextId, artifact, append);
     this.eventHub.emit(taskId, event);
     return event;

@@ -1004,4 +1004,37 @@ describe("relay team status tool", () => {
     const failedRun = state.runtime.teamStore.getRunForSession("session-manager");
     expect(failedRun?.status).toBe("failed");
   });
+
+  it("rejects runId lookups from sessions outside the relay workflow team", async () => {
+    const databasePath = createTestDatabaseLocation("team-status-authz");
+    dbLocations.push(databasePath);
+    const promptAsync = vi.fn().mockResolvedValue({ data: true });
+    const hooks = await RelayPlugin(createPluginInput("project-team-status", promptAsync), {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const started = JSON.parse(await hooks.tool?.relay_team_start.execute({ task: "ship team workflow" }, {
+      sessionID: "session-manager",
+      messageID: "m-authz-1",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    }) as string) as { runId: string };
+
+    await expect(hooks.tool?.relay_team_status.execute({ runId: started.runId }, {
+      sessionID: "session-outsider",
+      messageID: "m-authz-2",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    })).rejects.toThrow(/no relay workflow team is bound/i);
+  });
 });

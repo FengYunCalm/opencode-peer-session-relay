@@ -48,4 +48,36 @@ describe("relay stores", () => {
     expect(reopenedAuditStore.list(taskId)).toHaveLength(1);
     expect(reopenedLinkStore.getSessionID(taskId)).toBe("session-1");
   });
+
+  it("rolls back cross-store task writes when a shared transaction fails", () => {
+    const location = createTestDatabaseLocation("relay-store-transaction");
+    dbLocations.push(location);
+
+    const taskStore = new TaskStore(location);
+    const auditStore = new AuditStore(location);
+    const sessionLinkStore = new SessionLinkStore(location);
+    const taskId = createOpaqueId("task");
+
+    expect(() => taskStore.transaction(() => {
+      taskStore.createTask({
+        taskId,
+        contextId: "context-rollback",
+        requestMessage: {
+          messageId: "msg-rollback-1",
+          role: "user",
+          parts: [{ text: "rollback", metadata: {} }],
+          metadata: {}
+        },
+        status: "submitted",
+        metadata: { origin: "test" }
+      });
+      auditStore.append(taskId, "task.created", { ok: true });
+      sessionLinkStore.link(taskId, "session-rollback");
+      throw new Error("force rollback");
+    })).toThrow("force rollback");
+
+    expect(taskStore.getTask(taskId)).toBeUndefined();
+    expect(auditStore.list(taskId)).toHaveLength(0);
+    expect(sessionLinkStore.getSessionID(taskId)).toBeUndefined();
+  });
 });
