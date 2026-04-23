@@ -200,7 +200,12 @@ export class RoomStore {
 
   listMembers(roomCode: string): RelayRoomMember[] {
     const rows = this.database
-      .prepare(`SELECT * FROM relay_room_members WHERE room_code = ? AND membership_status = 'active' ORDER BY joined_at ASC`)
+      .prepare(`
+        SELECT *
+        FROM relay_room_members
+        WHERE room_code = ? AND membership_status = 'active'
+        ORDER BY CASE WHEN role = 'owner' THEN 0 ELSE 1 END ASC, joined_at ASC, session_id ASC
+      `)
       .all(roomCode) as RelayRoomMemberRow[];
 
     return rows.map((row) => this.hydrateMember(row));

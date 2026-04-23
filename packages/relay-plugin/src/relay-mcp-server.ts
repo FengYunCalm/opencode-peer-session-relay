@@ -3,13 +3,8 @@ import { join } from "node:path";
 
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-import { RelayRoomOrchestrator } from "./internal/orchestration/relay-room-orchestrator.js";
-import { AuditStore } from "./internal/store/audit-store.js";
-import { RoomStore, type RelayRoomKind, type RelayRoomMemberRole } from "./internal/store/room-store.js";
-import { ThreadStore } from "./internal/store/thread-store.js";
-import { MessageStore } from "./internal/store/message-store.js";
+import { RelayMcpService } from "./relay-mcp-service.js";
 import { concreteRelaySessionIDSchema } from "./session-id.js";
 
 const roomCreateSchema = z.object({ sessionID: concreteRelaySessionIDSchema, kind: z.enum(["private", "group"]).default("private") });
@@ -60,109 +55,11 @@ export function resolveCompatDatabasePath(): string {
   return join(homedir(), ".config", "opencode", "plugins", "opencode-a2a-relay.sqlite");
 }
 
-class RelayMcpService {
-  readonly roomStore: RoomStore;
-  readonly threadStore: ThreadStore;
-  readonly messageStore: MessageStore;
-  readonly auditStore: AuditStore;
-  readonly orchestrator: RelayRoomOrchestrator;
-
-  constructor(databasePath: string) {
-    this.roomStore = new RoomStore(databasePath);
-    this.threadStore = new ThreadStore(databasePath);
-    this.messageStore = new MessageStore(databasePath);
-    this.auditStore = new AuditStore(databasePath);
-    this.orchestrator = new RelayRoomOrchestrator(this.roomStore, this.threadStore, this.messageStore, {
-      recordDiagnostic: (eventType, payload) => this.auditStore.append("__relay_diagnostics__", eventType, payload),
-      resolveNotificationDecision: () => ({ allowed: false, reason: "standalone compatibility path stores messages only" }),
-      notifyPrivateRoomPeer: async () => {
-        throw new Error("standalone compatibility path does not inject into OpenCode sessions");
-      },
-      notifyThreadParticipant: async () => {
-        throw new Error("standalone compatibility path does not inject into OpenCode sessions");
-      }
-    });
-  }
-
-  close(): void {
-    this.auditStore.close();
-    this.roomStore.close();
-    this.threadStore.close();
-    this.messageStore.close();
-  }
-
-  createRoom(sessionID: string, kind: RelayRoomKind) {
-    return this.orchestrator.createRoom(sessionID, kind);
-  }
-
-  joinRoom(roomCode: string, sessionID: string, alias?: string) {
-    return this.orchestrator.joinRoom(roomCode, sessionID, alias);
-  }
-
-  getRoomStatus(sessionID: string, roomCode?: string) {
-    const room = this.orchestrator.resolveRoomForSession(sessionID, roomCode);
-    return { room, members: this.roomStore.listMembers(room.roomCode) };
-  }
-
-  listRoomMembers(roomCode?: string, sessionID?: string) {
-    if (!sessionID && !roomCode) throw new Error("roomCode or sessionID is required to list room members.");
-    const room = sessionID ? this.orchestrator.resolveRoomForSession(sessionID, roomCode) : this.roomStore.getRoom(roomCode!);
-    if (!room) throw new Error(`Room ${roomCode} does not exist.`);
-    return this.roomStore.listMembers(room.roomCode);
-  }
-
-  setRoomRole(input: { roomCode?: string; actorSessionID: string; targetSessionID: string; role: RelayRoomMemberRole }) {
-    return this.orchestrator.setRoomMemberRole(input.roomCode, input.actorSessionID, input.targetSessionID, input.role);
-  }
-
-  createThread(input: { roomCode?: string; createdBySessionID: string; kind: "direct" | "group"; participantSessionIDs: string[]; title?: string }) {
-    const uniqueParticipants = [...new Set(input.participantSessionIDs.includes(input.createdBySessionID) ? input.participantSessionIDs : [input.createdBySessionID, ...input.participantSessionIDs])];
-    return this.orchestrator.createThread({ ...input, participantSessionIDs: uniqueParticipants });
-  }
-
-  listThreads(roomCode?: string, sessionID?: string) {
-    return this.orchestrator.listThreads({ roomCode, sessionID });
-  }
-
-  listMessages(threadId: string, afterSeq?: number, limit?: number) {
-    return this.orchestrator.listMessages(threadId, afterSeq ?? 0, limit ?? 100);
-  }
-
-  sendRoomMessage(input: { sessionID: string; roomCode?: string; message: string; targetAlias?: string }) {
-    this.auditStore.append("__relay_diagnostics__", "relay.send.entry", {
-      surface: "compat",
-      tool: "compat_room_send",
-      sessionID: input.sessionID,
-      roomCode: input.roomCode ?? null,
-      targetAlias: input.targetAlias ?? null
-    });
-    return this.orchestrator.sendRoomMessage(input.sessionID, input.message, input.targetAlias, input.roomCode);
-  }
-
-  sendThreadMessage(input: { threadId: string; senderSessionID: string; message: string; messageType?: string }) {
-    this.auditStore.append("__relay_diagnostics__", "relay.send.entry", {
-      surface: "compat",
-      tool: "compat_message_send",
-      senderSessionID: input.senderSessionID,
-      threadId: input.threadId,
-      messageType: input.messageType ?? "relay"
-    });
-    return this.orchestrator.sendThreadMessage(input);
-  }
-
-  markThreadRead(threadId: string, sessionID: string, seq: number) {
-    return this.orchestrator.markThreadRead(threadId, sessionID, seq);
-  }
-
-  exportTranscript(threadId: string) {
-    return this.orchestrator.exportTranscript(threadId);
-  }
-}
-
 export function createRelayBridgeMcpServer() {
   const dbPath = resolveCompatDatabasePath();
   const service = new RelayMcpService(dbPath);
   const mcp = new McpServer({ name: "relay", version: "0.1.0" });
+  let closed = false;
 
   mcp.registerTool("compat_room_create", { description: "Create a private or group room through the standalone compatibility path", inputSchema: roomCreateSchema.shape }, async (args) => ({ content: [{ type: "text", text: JSON.stringify(service.createRoom(args.sessionID, args.kind), null, 2) }] }) as never);
   mcp.registerTool("compat_room_join", { description: "Join a room, optionally with alias for group rooms, through the standalone compatibility path", inputSchema: roomJoinSchema.shape }, async (args) => ({ content: [{ type: "text", text: JSON.stringify(service.joinRoom(args.roomCode, args.sessionID, args.alias), null, 2) }] }) as never);
@@ -177,23 +74,15 @@ export function createRelayBridgeMcpServer() {
   mcp.registerTool("compat_message_mark_read", { description: "Advance the read cursor for a thread through the standalone compatibility path", inputSchema: markReadSchema.shape }, async (args) => ({ content: [{ type: "text", text: JSON.stringify(service.markThreadRead(args.threadId, args.sessionID, args.seq), null, 2) }] }) as never);
   mcp.registerTool("compat_transcript_export", { description: "Export the full transcript for a thread through the standalone compatibility path", inputSchema: transcriptExportSchema.shape }, async (args) => ({ content: [{ type: "text", text: JSON.stringify(service.exportTranscript(args.threadId), null, 2) }] }) as never);
 
-  const shutdown = async () => {
+  const close = mcp.close.bind(mcp);
+  mcp.close = async () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
     service.close();
-    await mcp.close();
-    process.exit(0);
+    await close();
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
   return mcp;
-}
-
-if (import.meta.main) {
-  const mcp = createRelayBridgeMcpServer();
-  const transport = new StdioServerTransport();
-  mcp.connect(transport).catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
 }

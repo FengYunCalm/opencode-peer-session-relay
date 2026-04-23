@@ -2,13 +2,13 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import type { Event } from "@opencode-ai/sdk";
 
-import { A2ARelayHost } from "./a2a/host.js";
 import { buildRelayPluginInstanceKey, resolveRelayPluginConfig } from "./config.js";
 import { buildCompactionContext } from "./runtime/compaction-anchor.js";
 import { createRelayPluginState, type RelayPluginState } from "./runtime/plugin-state.js";
 import { deleteRelayPluginStartup, readRelayPluginStartup, readRelayPluginState, registerRelayPluginStartup, registerRelayPluginState, registerRelayProjectInstance } from "./runtime/plugin-instance-registry.js";
 import { RelayRuntime } from "./runtime/relay-runtime.js";
 import { bootstrapRelayWorkflowTeam } from "./runtime/team-workflow.js";
+import { createRelayA2AHost } from "./a2a/relay-host-factory.js";
 import { isRelayCurrentSessionPlaceholder, shouldInjectRelaySessionID } from "./session-id.js";
 import { SessionRegistry } from "./runtime/session-registry.js";
 
@@ -108,17 +108,7 @@ export const RelayPlugin: Plugin = async (input, options) => {
       const startup = (async () => {
         const sessionRegistry = new SessionRegistry();
         const runtime = new RelayRuntime(input, config, sessionRegistry);
-        let host: A2ARelayHost;
-        host = new A2ARelayHost(config.a2a, {
-          readiness: () => ({ ok: true, detail: "relay plugin runtime booted" }),
-          health: () => ({
-            projectID: projectKey,
-            startedAt: new Date().toISOString(),
-            activeTaskCount: runtime.taskStore.listActiveTasks().length
-          }),
-          agentCard: () => runtime.buildAgentCard(host.url),
-          rpc: async (payload) => runtime.handleJsonRpc(payload)
-        });
+        const host = createRelayA2AHost(config.a2a, runtime, projectKey);
 
         await host.start();
         const nextState = createRelayPluginState(config, host, runtime);
