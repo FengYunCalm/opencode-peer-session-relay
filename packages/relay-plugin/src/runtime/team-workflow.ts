@@ -22,7 +22,7 @@ type TeamBootstrapResult = {
   roomKind: "group";
   managerSessionID: string;
   status: string;
-  childSessions: TeamSessionRecord[];
+  workerSessions: TeamSessionRecord[];
   nextStep: string;
 };
 
@@ -36,7 +36,6 @@ type SessionCreateResponseLike = {
 type SessionApi = {
   create(options?: {
     body?: {
-      parentID?: string;
       title?: string;
     };
     query?: {
@@ -353,14 +352,13 @@ export async function bootstrapRelayWorkflowTeam(input: PluginInput, runtime: Re
     task: normalizedTask
   });
 
-  const childSessions: TeamSessionRecord[] = [];
+  const workerSessions: TeamSessionRecord[] = [];
 
   try {
     for (const spec of defaultWorkerSpecs) {
       const fallbackTitle = buildSessionTitle(spec.role, normalizedTask);
       const created = await sessionApi.create({
         body: {
-          parentID: managerSessionID,
           title: fallbackTitle
         },
         query: {
@@ -382,7 +380,7 @@ export async function bootstrapRelayWorkflowTeam(input: PluginInput, runtime: Re
         alias: spec.alias,
         title
       });
-      childSessions.push({
+      workerSessions.push({
         role: spec.role,
         alias: spec.alias,
         sessionID,
@@ -400,7 +398,7 @@ export async function bootstrapRelayWorkflowTeam(input: PluginInput, runtime: Re
 
   let currentWorkerSessionID: string | undefined;
   try {
-    for (const worker of childSessions) {
+    for (const worker of workerSessions) {
       const spec = defaultWorkerSpecs.find((item) => item.role === worker.role);
       if (!spec) {
         continue;
@@ -452,7 +450,7 @@ export async function bootstrapRelayWorkflowTeam(input: PluginInput, runtime: Re
     roomKind: "group",
     managerSessionID,
     status: teamStatus.status,
-    childSessions,
-    nextStep: "Workers were created and bootstrapped asynchronously. Stay in the current session as manager and use relay_team_status plus normal relay plugin tools to monitor or coordinate the room."
+    workerSessions,
+    nextStep: "Workers were created as root OpenCode sessions and bootstrapped asynchronously. Stay in the current session as manager and use relay_team_status plus normal relay plugin tools to monitor or coordinate the room."
   };
 }

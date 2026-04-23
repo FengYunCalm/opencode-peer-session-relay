@@ -81,7 +81,7 @@ Repo-local `/relay-*` commands are operator shortcuts for the internal ops MCP s
 
 ### Team workflow flow
 1. The manager session runs `/team <task>`
-2. The plugin creates a group room plus child worker sessions
+2. The plugin creates a group room plus three worker root sessions
 3. Workers join with fixed aliases and report workflow signals such as `[TEAM_READY]`, `[TEAM_PROGRESS]`, `[TEAM_BLOCKER]`, and `[TEAM_DONE]`
 4. The manager checks `relay_team_status` to monitor readiness, active work, blockers, completion, and the recent workflow event trail
 5. The manager uses `relay_team_intervene` for standardized retry/reassign/unblock actions that are recorded in the workflow timeline

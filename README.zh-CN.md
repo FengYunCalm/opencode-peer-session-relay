@@ -81,7 +81,7 @@
 
 ### 团队工作流
 1. manager session 运行 `/team <task>`
-2. plugin 创建一个 group room 和三个 worker child sessions
+2. plugin 创建一个 group room 和三个 worker 主会话
 3. workers 用固定 alias 入房，并通过 `[TEAM_READY]`、`[TEAM_PROGRESS]`、`[TEAM_BLOCKER]`、`[TEAM_DONE]` 汇报状态
 4. manager 通过 `relay_team_status` 查看 ready / active / blocked / completed 状态和最近 workflow timeline
 5. manager 使用 `relay_team_intervene` 执行标准化 retry / reassign / unblock 操作，并把结果写入 workflow timeline

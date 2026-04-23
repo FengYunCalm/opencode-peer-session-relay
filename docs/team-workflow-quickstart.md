@@ -6,7 +6,7 @@ This repository now exposes a minimal relay-backed team workflow on top of the p
 
 - keeps the current conversation as the **manager**
 - creates a relay **group room**
-- creates three child worker sessions: `planner`, `implementer`, `reviewer`
+- creates three worker root sessions: `planner`, `implementer`, `reviewer`
 - bootstraps those workers so they join the room and report status through relay messages
 
 ## Start a workflow
@@ -28,7 +28,7 @@ The workflow tool will return:
 - `runId`
 - `roomCode`
 - `managerSessionID`
-- the child worker sessions that were created
+- the worker root sessions that were created
 
 ## Check workflow status
 

@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 describe("relay team start tool", () => {
-  it("creates a manager-owned group room and bootstraps worker child sessions", async () => {
+  it("creates a manager-owned group room and bootstraps worker root sessions", async () => {
     const databasePath = createTestDatabaseLocation("team-start");
     dbLocations.push(databasePath);
     const promptAsync = vi.fn().mockResolvedValue({ data: undefined });
@@ -69,7 +69,7 @@ describe("relay team start tool", () => {
     const parsed = JSON.parse(started ?? "{}");
     expect(parsed.roomKind).toBe("group");
     expect(parsed.managerSessionID).toBe("session-manager");
-    expect(parsed.childSessions).toEqual([
+    expect(parsed.workerSessions).toEqual([
       expect.objectContaining({ role: "planner", alias: "planner", sessionID: "session-planner" }),
       expect.objectContaining({ role: "implementer", alias: "implementer", sessionID: "session-implementer" }),
       expect.objectContaining({ role: "reviewer", alias: "reviewer", sessionID: "session-reviewer" })
@@ -77,7 +77,7 @@ describe("relay team start tool", () => {
 
     expect(create).toHaveBeenCalledTimes(3);
     expect(create).toHaveBeenNthCalledWith(1, {
-      body: { parentID: "session-manager", title: "team/planner: ship team workflow" },
+      body: { title: "team/planner: ship team workflow" },
       query: { directory: "C:/relay-project" }
     });
     expect(promptAsync).toHaveBeenCalledTimes(3);
