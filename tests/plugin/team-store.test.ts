@@ -12,6 +12,26 @@ afterEach(() => {
 });
 
 describe("team run completion gate", () => {
+  it("distinguishes manager and worker access to a team run", () => {
+    const databasePath = createTestDatabaseLocation("team-store-access");
+    dbLocations.push(databasePath);
+
+    const store = new TeamStore(databasePath);
+    stores.push(store);
+
+    const run = store.createRun({
+      managerSessionID: "session-manager",
+      roomCode: "room-access",
+      task: "verify access boundaries"
+    });
+
+    store.addWorker({ runId: run.runId, sessionID: "session-worker", role: "planner", alias: "planner", title: "planner" });
+
+    expect(store.getRunAccess("session-manager", "room-access", run.runId)?.role).toBe("manager");
+    expect(store.getRunAccess("session-worker", "room-access", run.runId)?.role).toBe("worker");
+    expect(store.getRunAccess("session-outsider", "room-access", run.runId)).toBeUndefined();
+  });
+
   it("does not mark the run completed before reviewer final acceptance", () => {
     const databasePath = createTestDatabaseLocation("team-store-review-gate");
     dbLocations.push(databasePath);
@@ -54,5 +74,40 @@ describe("team run completion gate", () => {
     });
 
     expect(store.getRun(run.runId)?.status).toBe("in_progress");
+  });
+
+  it("rejects worker signal transitions that move backward from completed", () => {
+    const databasePath = createTestDatabaseLocation("team-store-transition");
+    dbLocations.push(databasePath);
+
+    const store = new TeamStore(databasePath);
+    stores.push(store);
+
+    const run = store.createRun({
+      managerSessionID: "session-manager",
+      roomCode: "room-transition",
+      task: "verify transition guard"
+    });
+
+    store.addWorker({ runId: run.runId, sessionID: "session-worker", role: "planner", alias: "planner", title: "planner" });
+
+    store.markWorkerSignal("session-worker", "room-transition", {
+      status: "completed",
+      ready: true,
+      source: "openspec",
+      phase: "tasks",
+      note: "planner completed",
+      evidence: ["tasks.md"]
+    });
+
+    expect(() => store.markWorkerSignal("session-worker", "room-transition", {
+      status: "in_progress",
+      ready: true,
+      source: "openspec",
+      phase: "revision",
+      note: "planner restarted"
+    })).toThrow(/completed -> in_progress/);
+
+    expect(store.listWorkers(run.runId).find((worker) => worker.sessionID === "session-worker")?.status).toBe("completed");
   });
 });

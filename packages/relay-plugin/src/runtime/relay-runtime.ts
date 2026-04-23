@@ -393,36 +393,29 @@ export class RelayRuntime {
     const result = await this.relayOrchestrator.sendRoomMessage(sourceSessionID, message, targetAlias, roomCode);
     const signal = classifyRelayWorkflowSignal(message);
     if (signal.matched && signal.accepted) {
-      this.teamStore.transaction(() => {
-        const worker = this.teamStore.markWorkerSignal(sourceSessionID, result.roomCode, signal);
-        if (worker) {
-          this.auditStore.append(worker.runId, `team.worker.${signal.status}`, {
-            sessionID: sourceSessionID,
-            role: worker.role,
-            alias: worker.alias,
-            roomCode: result.roomCode,
-            note: signal.note,
-            source: signal.source,
-            phase: signal.phase,
-            progress: signal.progress,
-            evidence: signal.evidence,
-            metadata: signal.metadata ?? {}
-          });
-        }
-      });
-    } else if (signal.matched) {
-      const run = this.teamStore.getRunForSession(sourceSessionID, result.roomCode);
-      if (run) {
-        const worker = this.teamStore.listWorkers(run.runId).find((entry) => entry.sessionID === sourceSessionID);
-        this.auditStore.append(run.runId, "team.worker.signal_rejected", {
-          sessionID: sourceSessionID,
-          role: worker?.role ?? "manager",
-          alias: worker?.alias,
-          roomCode: result.roomCode,
-          rawMessage: message,
-          rejectionReason: signal.rejectionReason ?? "invalid workflow signal"
+      try {
+        this.teamStore.transaction(() => {
+          const worker = this.teamStore.markWorkerSignal(sourceSessionID, result.roomCode, signal);
+          if (worker) {
+            this.auditStore.append(worker.runId, `team.worker.${signal.status}`, {
+              sessionID: sourceSessionID,
+              role: worker.role,
+              alias: worker.alias,
+              roomCode: result.roomCode,
+              note: signal.note,
+              source: signal.source,
+              phase: signal.phase,
+              progress: signal.progress,
+              evidence: signal.evidence,
+              metadata: signal.metadata ?? {}
+            });
+          }
         });
+      } catch (error) {
+        this.recordRejectedTeamSignal(sourceSessionID, result.roomCode, message, error instanceof Error ? error.message : "invalid workflow transition");
       }
+    } else if (signal.matched) {
+      this.recordRejectedTeamSignal(sourceSessionID, result.roomCode, message, signal.rejectionReason ?? "invalid workflow signal");
     }
     return result;
   }
@@ -449,13 +442,14 @@ export class RelayRuntime {
     threadId: string;
     peerSessionID: string;
   }> {
-    const run = this.teamStore.getRunForSession(managerSessionID, input.roomCode, input.runId);
-    if (!run) {
+    const access = this.teamStore.getRunAccess(managerSessionID, input.roomCode, input.runId);
+    if (!access) {
       throw new Error(`No relay workflow team is bound to session ${managerSessionID}.`);
     }
-    if (run.managerSessionID !== managerSessionID) {
+    if (access.role !== "manager") {
       throw new Error("Only the manager session can issue team interventions.");
     }
+    const run = access.run;
 
     const note = input.note.trim();
     if (!note) {
@@ -525,10 +519,14 @@ export class RelayRuntime {
     threadId: string;
     peerSessionID: string;
   }> {
-    const run = this.teamStore.getRunForSession(managerSessionID, input.roomCode, input.runId);
-    if (!run) {
+    const access = this.teamStore.getRunAccess(managerSessionID, input.roomCode, input.runId);
+    if (!access) {
       throw new Error(`No relay workflow team is bound to session ${managerSessionID}.`);
     }
+    if (access.role !== "manager") {
+      throw new Error("Only the manager session can apply team policies.");
+    }
+    const run = access.run;
 
     const decision = this.buildPolicyDecisions(
       this.teamStore.listWorkers(run.runId).map((worker) => this.decorateTeamWorker(worker)),
@@ -574,10 +572,11 @@ export class RelayRuntime {
   }
 
   getTeamStatus(sessionID: string, runId?: string, roomCode?: string): RelayTeamStatusView {
-    const run = this.teamStore.getRunForSession(sessionID, roomCode, runId);
-    if (!run) {
+    const access = this.teamStore.getRunAccess(sessionID, roomCode, runId);
+    if (!access) {
       throw new Error(`No relay workflow team is bound to session ${sessionID}.`);
     }
+    const run = access.run;
 
     const workers = this.teamStore.listWorkers(run.runId).map((worker) => this.decorateTeamWorker(worker));
     const currentWorker = workers.find((worker) => worker.sessionID === sessionID);
@@ -599,7 +598,7 @@ export class RelayRuntime {
       task: run.task,
       status: run.status,
       managerSessionID: run.managerSessionID,
-      currentSessionRole: currentWorker?.role ?? "manager",
+      currentSessionRole: access.role === "manager" ? "manager" : (access.worker?.role ?? currentWorker?.role ?? "worker"),
       workers,
       summary: { counts, healthCounts },
       recentEvents,
@@ -612,17 +611,18 @@ export class RelayRuntime {
   }
 
   buildTeamCompactionContext(sessionID: string, limit: number): string[] {
-    const run = this.teamStore.getRunForSession(sessionID);
-    if (!run) {
+    const access = this.teamStore.getRunAccess(sessionID);
+    if (!access) {
       return [];
     }
+    const run = access.run;
 
     const workers = this.teamStore.listWorkers(run.runId).slice(0, limit);
     const currentWorker = workers.find((worker) => worker.sessionID === sessionID);
     return [
       "## Team Workflow",
       `Run: ${run.runId}`,
-      `Role: ${currentWorker?.role ?? "manager"}`,
+      `Role: ${access.role === "manager" ? "manager" : (access.worker?.role ?? currentWorker?.role ?? "worker")}`,
       `Room: ${run.roomCode}`,
       `Task: ${run.task}`,
       `Status: ${run.status}`,
@@ -939,6 +939,22 @@ export class RelayRuntime {
     for await (const event of events) {
       yield { jsonrpc: "2.0", method: "task.event", params: event } as JsonValue;
     }
+  }
+
+  private recordRejectedTeamSignal(sourceSessionID: string, roomCode: string, rawMessage: string, rejectionReason: string): void {
+    const access = this.teamStore.getRunAccess(sourceSessionID, roomCode);
+    if (!access) {
+      return;
+    }
+
+    this.auditStore.append(access.run.runId, "team.worker.signal_rejected", {
+      sessionID: sourceSessionID,
+      role: access.worker?.role ?? access.role,
+      alias: access.worker?.alias,
+      roomCode,
+      rawMessage,
+      rejectionReason
+    });
   }
 
   private buildTeamNextStep(run: RelayTeamRun, workers: RelayTeamWorkerView[]): string {

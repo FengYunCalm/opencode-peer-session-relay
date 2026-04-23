@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { aggregateTeamRunStatus } from "../policy/team-status-policy.js";
+import { validateWorkerSignalTransition } from "../policy/team-worker-transition-policy.js";
 import { initializeRelaySchema } from "./schema.js";
 import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
@@ -32,6 +34,12 @@ export type RelayTeamWorker = {
   joinedAt?: number;
   readyAt?: number;
   updatedAt: number;
+};
+
+export type RelayTeamRunAccess = {
+  run: RelayTeamRun;
+  role: "manager" | "worker";
+  worker?: RelayTeamWorker;
 };
 
 type RelayTeamRunRow = {
@@ -92,60 +100,6 @@ function deserializeEvidence(value: string | null): unknown {
   }
 }
 
-function reviewerFinalAcceptanceSatisfied(workers: RelayTeamWorker[]): boolean {
-  const reviewers = workers.filter((worker) => worker.role === "reviewer");
-  if (reviewers.length === 0) {
-    return true;
-  }
-
-  return reviewers.every((worker) => worker.status === "completed" && worker.workflowPhase === "final-acceptance-pass");
-}
-
-function aggregateRunStatus(workers: RelayTeamWorker[], currentStatus?: RelayTeamRunStatus): RelayTeamRunStatus {
-  const reviewerGateSatisfied = reviewerFinalAcceptanceSatisfied(workers);
-
-  if (currentStatus === "failed") {
-    return currentStatus;
-  }
-
-  if (currentStatus === "completed" && reviewerGateSatisfied && workers.every((worker) => worker.status === "completed")) {
-    return currentStatus;
-  }
-
-  if (workers.length === 0) {
-    return "bootstrapping";
-  }
-  if (workers.some((worker) => worker.status === "failed")) {
-    return "failed";
-  }
-  if (workers.some((worker) => worker.status === "blocked")) {
-    return "blocked";
-  }
-
-  const allNonReviewerWorkersCompleted = workers
-    .filter((worker) => worker.role !== "reviewer")
-    .every((worker) => worker.status === "completed");
-
-  if (workers.every((worker) => worker.status === "completed")) {
-    return reviewerGateSatisfied ? "completed" : "in_progress";
-  }
-
-  if (allNonReviewerWorkersCompleted && !reviewerGateSatisfied) {
-    return "in_progress";
-  }
-
-  if (workers.some((worker) => worker.status === "in_progress")) {
-    return "in_progress";
-  }
-  if (workers.every((worker) => ["ready", "completed"].includes(worker.status))) {
-    return "ready";
-  }
-  if (workers.some((worker) => ["created", "bootstrapped", "joined"].includes(worker.status))) {
-    return "waiting";
-  }
-  return "bootstrapping";
-}
-
 export class TeamStore {
   private readonly database: SqliteDatabase;
 
@@ -166,6 +120,57 @@ export class TeamStore {
       .run(runId, input.managerSessionID, input.roomCode, input.task, "bootstrapping", now, now);
 
     return this.getRun(runId)!;
+  }
+
+  getRunForManager(sessionID: string, roomCode?: string, runId?: string): RelayTeamRun | undefined {
+    if (runId) {
+      const run = this.getRun(runId);
+      if (!run) {
+        return undefined;
+      }
+      if (roomCode && run.roomCode !== roomCode) {
+        return undefined;
+      }
+      return run.managerSessionID === sessionID ? run : undefined;
+    }
+
+    const byManager = this.database
+      .prepare(`
+        SELECT * FROM relay_team_runs
+        WHERE manager_session_id = ?
+          AND (? IS NULL OR room_code = ?)
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `)
+      .get(sessionID, roomCode ?? null, roomCode ?? null) as RelayTeamRunRow | undefined;
+
+    return byManager ? this.hydrateRun(byManager) : undefined;
+  }
+
+  getRunForParticipant(sessionID: string, roomCode?: string, runId?: string): RelayTeamRun | undefined {
+    return this.getRunForSession(sessionID, roomCode, runId);
+  }
+
+  getRunAccess(sessionID: string, roomCode?: string, runId?: string): RelayTeamRunAccess | undefined {
+    const managerRun = this.getRunForManager(sessionID, roomCode, runId);
+    if (managerRun) {
+      return {
+        run: managerRun,
+        role: "manager"
+      };
+    }
+
+    const workerRun = this.getRunForParticipant(sessionID, roomCode, runId);
+    if (!workerRun) {
+      return undefined;
+    }
+
+    const workerRow = this.findWorkerRow(sessionID, workerRun.roomCode);
+    return {
+      run: workerRun,
+      role: "worker",
+      worker: workerRow ? this.hydrateWorker(workerRow) : undefined
+    };
   }
 
   addWorker(input: {
@@ -248,18 +253,10 @@ export class TeamStore {
       return worker ? run : undefined;
     }
 
-    const byManager = this.database
-      .prepare(`
-        SELECT * FROM relay_team_runs
-        WHERE manager_session_id = ?
-          AND (? IS NULL OR room_code = ?)
-        ORDER BY updated_at DESC
-        LIMIT 1
-      `)
-      .get(sessionID, roomCode ?? null, roomCode ?? null) as RelayTeamRunRow | undefined;
+    const byManager = this.getRunForManager(sessionID, roomCode, runId);
 
     if (byManager) {
-      return this.hydrateRun(byManager);
+      return byManager;
     }
 
     const byWorker = this.findWorkerRow(sessionID, roomCode);
@@ -298,15 +295,22 @@ export class TeamStore {
     progress?: number;
     evidence?: unknown;
   }): RelayTeamWorker | undefined {
-    return this.updateWorkerBySession(sessionID, roomCode, (worker) => ({
-      status: input.status,
-      readyAt: input.ready ? (worker.readyAt ?? Date.now()) : worker.readyAt,
-      lastNote: input.note ?? worker.lastNote,
-      workflowSource: input.source ?? worker.workflowSource,
-      workflowPhase: input.phase ?? worker.workflowPhase,
-      progress: input.progress ?? worker.progress,
-      evidence: input.evidence ?? worker.evidence
-    }));
+    return this.updateWorkerBySession(sessionID, roomCode, (worker) => {
+      const validation = validateWorkerSignalTransition(worker.status, input.status);
+      if (!validation.accepted) {
+        throw new Error(validation.rejectionReason);
+      }
+
+      return {
+        status: input.status,
+        readyAt: input.ready ? (worker.readyAt ?? Date.now()) : worker.readyAt,
+        lastNote: input.note ?? worker.lastNote,
+        workflowSource: input.source ?? worker.workflowSource,
+        workflowPhase: input.phase ?? worker.workflowPhase,
+        progress: input.progress ?? worker.progress,
+        evidence: input.evidence ?? worker.evidence
+      };
+    });
   }
 
   markWorkerFailed(sessionID: string, errorMessage: string, roomCode?: string): RelayTeamWorker | undefined {
@@ -331,7 +335,7 @@ export class TeamStore {
       throw new Error(`Team run not found: ${runId}`);
     }
 
-    const nextStatus = aggregateRunStatus(this.listWorkers(runId), current.status);
+    const nextStatus = aggregateTeamRunStatus(this.listWorkers(runId), current.status);
     this.database.prepare(`UPDATE relay_team_runs SET status = ?, updated_at = ? WHERE run_id = ?`).run(nextStatus, Date.now(), runId);
     return this.getRun(runId)!;
   }

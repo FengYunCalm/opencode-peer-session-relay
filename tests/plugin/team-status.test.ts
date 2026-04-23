@@ -1037,4 +1037,75 @@ describe("relay team status tool", () => {
       ask: async () => {}
     })).rejects.toThrow(/no relay workflow team is bound/i);
   });
+
+  it("records invalid backward TEAM transitions as rejected signals without regressing worker state", async () => {
+    const databasePath = createTestDatabaseLocation("team-status-transition-guard");
+    dbLocations.push(databasePath);
+    const hooks = await RelayPlugin(createPluginInput("project-team-status"), {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const started = JSON.parse(await hooks.tool?.relay_team_start.execute({ task: "ship team workflow" }, {
+      sessionID: "session-manager",
+      messageID: "m-transition-1",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    }) as string) as { roomCode: string; runId: string };
+
+    await hooks.tool?.relay_room_join.execute({ roomCode: started.roomCode, alias: "planner" }, {
+      sessionID: "session-planner",
+      messageID: "session-planner-join-transition",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    await hooks.tool?.relay_room_send.execute({ roomCode: started.roomCode, message: "[TEAM_DONE] {\"source\":\"openspec\",\"phase\":\"tasks\",\"note\":\"planner finished\",\"evidence\":[\"tasks.md\"],\"handoffTo\":\"manager\",\"deliverables\":[\"tasks.md\"]}" }, {
+      sessionID: "session-planner",
+      messageID: "session-planner-done-transition",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    await hooks.tool?.relay_room_send.execute({ roomCode: started.roomCode, message: "[TEAM_PROGRESS] {\"source\":\"openspec\",\"phase\":\"revision\",\"note\":\"planner tried to restart\",\"progress\":40}" }, {
+      sessionID: "session-planner",
+      messageID: "session-planner-invalid-transition",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    const managerStatus = JSON.parse(await hooks.tool?.relay_team_status.execute({ runId: started.runId }, {
+      sessionID: "session-manager",
+      messageID: "m-transition-2",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    }) as string) as {
+      workers: Array<{ alias: string; status: string }>;
+      recentEvents: Array<{ eventType: string; payload: Record<string, unknown> }>;
+    };
+
+    expect(managerStatus.workers.find((worker) => worker.alias === "planner")?.status).toBe("completed");
+    expect(managerStatus.recentEvents.some((event) => event.eventType === "team.worker.signal_rejected" && String(event.payload.rejectionReason).includes("completed -> in_progress"))).toBe(true);
+  });
 });
