@@ -3404,6 +3404,14 @@
       "community": 55
     },
     {
+      "label": "opencode-entrypoints.test.ts",
+      "file_type": "code",
+      "source_file": "tests/plugin/opencode-entrypoints.test.ts",
+      "source_location": "L1",
+      "id": "tests_plugin_opencode_entrypoints_test_ts",
+      "community": 91
+    },
+    {
       "label": "a2a-http.test.ts",
       "file_type": "code",
       "source_file": "tests/plugin/a2a-http.test.ts",
@@ -3433,7 +3441,7 @@
       "source_file": "tests/plugin/send-message-stream.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_send_message_stream_test_ts",
-      "community": 91
+      "community": 92
     },
     {
       "label": "thread-message-store.test.ts",
@@ -3441,7 +3449,7 @@
       "source_file": "tests/plugin/thread-message-store.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_thread_message_store_test_ts",
-      "community": 92
+      "community": 93
     },
     {
       "label": "team-status.test.ts",
@@ -3465,7 +3473,7 @@
       "source_file": "tests/plugin/config-path.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_config_path_test_ts",
-      "community": 93
+      "community": 94
     },
     {
       "label": "room-store.test.ts",
@@ -3473,7 +3481,7 @@
       "source_file": "tests/plugin/room-store.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_room_store_test_ts",
-      "community": 94
+      "community": 95
     },
     {
       "label": "message-queue.test.ts",
@@ -3497,7 +3505,7 @@
       "source_file": "tests/plugin/local-plugin-entry.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_local_plugin_entry_test_ts",
-      "community": 95
+      "community": 96
     },
     {
       "label": "replay-runtime.test.ts",
@@ -3521,7 +3529,7 @@
       "source_file": "tests/plugin/smoke.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_smoke_test_ts",
-      "community": 96
+      "community": 97
     },
     {
       "label": "prompt-preamble.test.ts",
@@ -3529,7 +3537,7 @@
       "source_file": "tests/plugin/prompt-preamble.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_prompt_preamble_test_ts",
-      "community": 97
+      "community": 98
     },
     {
       "label": "internal-mcp.test.ts",
@@ -3537,7 +3545,7 @@
       "source_file": "tests/plugin/internal-mcp.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_internal_mcp_test_ts",
-      "community": 98
+      "community": 99
     },
     {
       "label": "team-governance.test.ts",
@@ -3561,7 +3569,7 @@
       "source_file": "tests/plugin/response-observer.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_response_observer_test_ts",
-      "community": 99
+      "community": 100
     },
     {
       "label": "store.test.ts",
@@ -3569,7 +3577,7 @@
       "source_file": "tests/plugin/store.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_store_test_ts",
-      "community": 100
+      "community": 101
     },
     {
       "label": "dispatch-failure.test.ts",
@@ -3593,7 +3601,7 @@
       "source_file": "tests/plugin/task-store-rules.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_task_store_rules_test_ts",
-      "community": 101
+      "community": 102
     },
     {
       "label": "loop-guard.test.ts",
@@ -3601,7 +3609,7 @@
       "source_file": "tests/plugin/loop-guard.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_loop_guard_test_ts",
-      "community": 102
+      "community": 103
     },
     {
       "label": "message-notification-window.test.ts",
@@ -3641,7 +3649,7 @@
       "source_file": "tests/plugin/relay-mcp-room-coexistence.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_relay_mcp_room_coexistence_test_ts",
-      "community": 103
+      "community": 104
     },
     {
       "label": "a2a-host.test.ts",
@@ -3649,7 +3657,7 @@
       "source_file": "tests/plugin/a2a-host.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_a2a_host_test_ts",
-      "community": 104
+      "community": 105
     },
     {
       "label": "mcp-first-hooks.test.ts",
@@ -3673,7 +3681,7 @@
       "source_file": "tests/plugin/delivery-gate.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_delivery_gate_test_ts",
-      "community": 105
+      "community": 106
     },
     {
       "label": "relay-orchestration.test.ts",
@@ -3681,7 +3689,7 @@
       "source_file": "tests/plugin/relay-orchestration.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_relay_orchestration_test_ts",
-      "community": 106
+      "community": 107
     },
     {
       "label": "package-surface.test.ts",
@@ -3689,7 +3697,7 @@
       "source_file": "tests/plugin/package-surface.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_package_surface_test_ts",
-      "community": 107
+      "community": 108
     },
     {
       "label": "bootstrap.test.ts",
@@ -3745,7 +3753,7 @@
       "source_file": "tests/plugin/package-manifest.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_package_manifest_test_ts",
-      "community": 108
+      "community": 109
     },
     {
       "label": "test-boundary-regression.test.ts",
@@ -3801,7 +3809,7 @@
       "source_file": "tests/plugin/team-store.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_team_store_test_ts",
-      "community": 109
+      "community": 110
     },
     {
       "label": "mcp-group-room.test.ts",
@@ -3825,7 +3833,7 @@
       "source_file": "tests/plugin/human-guard.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_human_guard_test_ts",
-      "community": 110
+      "community": 111
     },
     {
       "label": "session-id.test.ts",
@@ -3833,7 +3841,7 @@
       "source_file": "tests/plugin/session-id.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_session_id_test_ts",
-      "community": 111
+      "community": 112
     },
     {
       "label": "room-tools.test.ts",
@@ -3857,7 +3865,7 @@
       "source_file": "tests/plugin/agent-card.test.ts",
       "source_location": "L1",
       "id": "tests_plugin_agent_card_test_ts",
-      "community": 112
+      "community": 113
     },
     {
       "label": "relay-plugin-testkit.ts",
@@ -3865,7 +3873,7 @@
       "source_file": "tests/support/relay-plugin-testkit.ts",
       "source_location": "L1",
       "id": "tests_support_relay_plugin_testkit_ts",
-      "community": 113
+      "community": 114
     }
   ],
   "links": [

@@ -9,6 +9,9 @@ Use this skill when you need operator visibility into the OpenCode A2A relay plu
 
 Available capabilities:
 - inspect current relay task status
+- inspect recent relay diagnostics
+- pause automated relay delivery for a session
+- resume automated relay delivery for a session
 - read persisted task/audit payloads
 - replay recoverable tasks after interruption
 

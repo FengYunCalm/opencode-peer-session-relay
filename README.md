@@ -13,7 +13,9 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 - `packages/relay-shared` — small shared utilities and constants
 - `tests/` — protocol, plugin, and end-to-end verification
 - `docs/plans/2026-04-03-opencode-a2a-plugin-relay-implementation-plan.md` — implementation plan used to drive the current design
+- `.opencode/commands/` — project-local OpenCode commands for team and relay ops workflows
 - `.opencode/skills/relay-room/SKILL.md` — project-local relay-room execution skill
+- `assets/skills/relay-ops/SKILL.md` — operator-facing skill metadata for the internal relay ops surface
 
 ## Graphify
 
@@ -44,16 +46,27 @@ Repository: https://github.com/FengYunCalm/opencode-peer-session-relay
 ## OpenCode skill and local plugin workflow
 
 - Project-local skill: `.opencode/skills/relay-room/SKILL.md`
+- Project-local commands: `.opencode/commands/team.md`, `.opencode/commands/relay-status.md`, `.opencode/commands/relay-pause.md`, `.opencode/commands/relay-resume.md`, `.opencode/commands/relay-replay.md`
+- Operator skill asset: `assets/skills/relay-ops/SKILL.md`
 - Global install target used during local testing:
   - plugin bundle: `~/.config/opencode/plugins/opencode-a2a-relay.js`
   - relay MCP bundle: `~/.config/opencode/plugins/opencode-a2a-relay-mcp.js`
 - Global OpenCode config now includes a local MCP server entry named `relay`
 - For OpenCode 1.3.6 local-path plugin compatibility, the installed plugin bundle uses `default export { id, server }`
 
+### Repo-local command entrypoints
+
+- `/team <task>` — start or coordinate a relay-backed workflow through the local `relay-room` skill
+- `/relay-status [taskId]` — inspect relay operator status and recent diagnostics
+- `/relay-pause <sessionID> [reason]` — pause automated relay delivery for a session
+- `/relay-resume <sessionID>` — resume automated relay delivery for a session
+- `/relay-replay <taskId>` — replay a recoverable relay task through the internal ops surface
+
 ### Why plugin-first
 Normal room and message operations must go through the relay plugin tool surface so that session-aware injection and wake-up hooks actually run.
 The standalone MCP bridge remains available only for compatibility and manual storage-oriented operations, and now uses distinct `compat_*` tool names to avoid colliding with plugin relay tools.
 For normal session-aware relay usage, call only the plugin tools: `relay_room_*`, `relay_thread_*`, `relay_message_*`, and `relay_transcript_export`. Any `relay_compat_*` tool is compatibility-only and does not represent the standard auto-injection path.
+Repo-local `/relay-*` commands are operator shortcuts for the internal ops MCP surface; they do not replace the plugin-first relay tool surface.
 
 ### Private room flow (unchanged)
 1. Conversation A creates a room

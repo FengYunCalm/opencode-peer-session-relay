@@ -110,3 +110,14 @@ Normal workflow usage must stay on the **plugin** surface.
 - Do **not** use `relay_compat_*` for normal workflow execution
 
 The compatibility path is storage-oriented and does not provide the session-aware relay workflow behavior.
+
+## Operator commands
+
+Inside this repository, you can also use these repo-local commands for operator workflows:
+
+- `/relay-status [taskId]`
+- `/relay-pause <sessionID> [reason]`
+- `/relay-resume <sessionID>`
+- `/relay-replay <taskId>`
+
+These commands target the internal relay ops surface for inspection, pause/resume control, and recoverable replay. They do not replace the plugin-first room or team workflow tools.

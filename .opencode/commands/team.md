@@ -1,7 +1,7 @@
 ---
 description: Start a relay-backed workflow team for a task
 ---
-Load the `team-core` skill and execute it for this task:
+Load the `relay-room` skill and use the relay plugin surface for this task:
 
 $ARGUMENTS
 

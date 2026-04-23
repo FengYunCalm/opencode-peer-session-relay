@@ -13,7 +13,9 @@
 - `packages/relay-shared` — 小型共享工具与常量
 - `tests/` — 协议、插件与端到端验证
 - `docs/plans/2026-04-03-opencode-a2a-plugin-relay-implementation-plan.md` — 当前设计所依据的实现计划
+- `.opencode/commands/` — 项目内置的 OpenCode commands，用于 team 和 relay ops 工作流
 - `.opencode/skills/relay-room/SKILL.md` — 项目内置的 relay-room 执行型 skill
+- `assets/skills/relay-ops/SKILL.md` — 面向 operator 的内部 relay ops skill 元数据
 
 ## Graphify
 
@@ -44,16 +46,27 @@
 ## OpenCode skill 与本地插件工作流
 
 - 项目内 skill：`.opencode/skills/relay-room/SKILL.md`
+- 项目内 commands：`.opencode/commands/team.md`、`.opencode/commands/relay-status.md`、`.opencode/commands/relay-pause.md`、`.opencode/commands/relay-resume.md`、`.opencode/commands/relay-replay.md`
+- operator skill 资源：`assets/skills/relay-ops/SKILL.md`
 - 本地测试时使用的全局安装目标：
   - plugin bundle：`~/.config/opencode/plugins/opencode-a2a-relay.js`
   - relay MCP bundle：`~/.config/opencode/plugins/opencode-a2a-relay-mcp.js`
 - 全局 OpenCode 配置已经包含本地 `relay` MCP server
 - 为兼容 OpenCode 1.3.6，本地路径 plugin bundle 采用 `default export { id, server }` 形状
 
+### 仓库内 command 入口
+
+- `/team <task>` — 通过本地 `relay-room` skill 启动或协调 relay-backed workflow
+- `/relay-status [taskId]` — 查看 relay 运维状态和最近诊断事件
+- `/relay-pause <sessionID> [reason]` — 暂停某个 session 的自动 relay 投递
+- `/relay-resume <sessionID>` — 恢复某个 session 的自动 relay 投递
+- `/relay-replay <taskId>` — 通过内部 ops surface 重放可恢复任务
+
 ### 为什么坚持 plugin-first
 普通 room / thread / message 操作必须走 relay plugin tool surface，才能真正触发 session-aware 注入、idle 唤醒和 workflow 状态汇总。
 独立 MCP bridge 仍然保留，但只用于兼容和偏存储型操作，并使用独立 `compat_*` 工具名，避免和 plugin relay tools 混淆。
 对于正常的 session-aware relay 使用，应优先调用 plugin tools：`relay_room_*`、`relay_thread_*`、`relay_message_*`、`relay_transcript_export`，以及 `relay_team_*`。任何 `relay_compat_*` 都不是标准自动注入路径。
+仓库内的 `/relay-*` commands 只是内部 ops MCP surface 的 operator 快捷入口，不替代 plugin-first 的 relay 工具面。
 
 ### 私聊房间流程（保持不变）
 1. 会话 A 创建一个房间

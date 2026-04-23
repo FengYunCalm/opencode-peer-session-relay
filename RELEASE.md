@@ -14,8 +14,10 @@ This repository is source-oriented. A release is a tagged source snapshot with a
 - Run the repository test suite and TypeScript build.
 - Refresh `graphify-out/` if code or docs changed in ways that affect the knowledge base.
 - Confirm that the plugin-first architecture and the compatibility-only MCP path are still accurately documented.
+- Confirm that `.opencode/commands/` and `.opencode/skills/` still match the documented plugin surface and internal ops surface.
 
 ## Notes
 
 - Do not present the repo as an npm package or hosted deployment unless that is explicitly added later.
 - Release notes should call out any cross-session, persistence, or workflow behavior changes.
+- Release notes should also call out repo-local OpenCode command or skill entrypoint changes when they affect operator workflow.
