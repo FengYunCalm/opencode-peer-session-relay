@@ -156,15 +156,12 @@ function buildManagerActionLines(summaries: ManagerRelaySummary[]): string[] {
 
   for (const summary of summaries) {
     if (summary.status === "blocked") {
-      actions.push(`- ${summary.alias}: manager input needed - ${summary.note}`);
+      actions.push(`- ${summary.alias}: manager input needed`);
       continue;
     }
 
     if (summary.handoffTo && summary.handoffTo !== "manager") {
-      const deliverables = summary.deliverables?.join(", ");
-      actions.push(deliverables
-        ? `- ${summary.alias}: suggested handoff to ${summary.handoffTo} - ${deliverables}`
-        : `- ${summary.alias}: suggested handoff to ${summary.handoffTo}`);
+      actions.push(`- ${summary.alias}: handoff to ${summary.handoffTo}`);
     }
   }
 
@@ -173,14 +170,14 @@ function buildManagerActionLines(summaries: ManagerRelaySummary[]): string[] {
   }
 
   if (summaries.some((summary) => summary.status === "progress" || summary.status === "ready")) {
-    return ["- no manager action yet; wait for more worker signals or open relay_team_status"];
+    return ["- no manager action yet"];
   }
 
   if (summaries.length > 0 && summaries.every((summary) => summary.status === "done" || summary.status === "note")) {
-    return ["- pass candidate; confirm with relay_team_status, then decide whether to clean up the team"];
+    return ["- pass candidate; confirm relay_team_status before cleanup"];
   }
 
-  return ["- open relay_team_status for the aggregate state if you need more context"];
+  return ["- open relay_team_status for more context"];
 }
 
 function isStableManagerPhase(phase?: string): boolean {
@@ -235,58 +232,42 @@ function renderAggregateWorkerLine(worker: RelayTeamWorkerView): string {
   return `${prefix}${worker.lastNote ? ` - ${summarizeDisplayNote(worker.lastNote)}` : ""}`;
 }
 
-function renderAggregateUnblockActionLine(action: {
-  targetAlias?: string;
-  reason: string;
-}): string {
-  if (!action.targetAlias) {
-    return `- ${summarizeDisplayNote(action.reason, 220)}`;
+function renderAggregateActionLine(action: RelayTeamStatusView["recommendedActions"][number]): string {
+  const target = action.targetAlias ?? "worker";
+
+  if (action.action === "unblock") {
+    return `- ${target}: unblock`;
   }
 
-  const blockedPrefix = `${action.targetAlias} is blocked: `;
-  if (action.reason.startsWith(blockedPrefix)) {
-    return `- ${action.targetAlias}: ${summarizeDisplayNote(action.reason.slice(blockedPrefix.length), 220)}`;
+  if (action.action === "reassign") {
+    return action.handoffTo ? `- ${target}: handoff to ${action.handoffTo}` : `- ${target}: reassign`;
   }
 
-  const needsManagerPrefix = `${action.targetAlias} is blocked and `;
-  if (action.reason.startsWith(needsManagerPrefix)) {
-    return `- ${action.targetAlias}: ${summarizeDisplayNote(action.reason.slice(needsManagerPrefix.length), 220)}`;
+  if (action.action === "retry") {
+    return `- ${target}: retry`;
   }
 
-  return `- ${action.targetAlias}: ${summarizeDisplayNote(action.reason, 220)}`;
+  return `- ${target}: nudge`;
 }
 
 function buildAggregateManagerActionLines(teamStatus: RelayTeamStatusView): string[] {
   if (teamStatus.recommendedActions.length > 0) {
-    return teamStatus.recommendedActions.map((action) => {
-      if (action.action === "unblock") {
-        return renderAggregateUnblockActionLine(action);
-      }
-      if (action.action === "reassign") {
-        return action.handoffTo
-          ? `- ${action.targetAlias ?? "worker"}: handoff to ${action.handoffTo}`
-          : `- ${action.targetAlias ?? "worker"}: reassign the next step`;
-      }
-      if (action.action === "retry") {
-        return `- ${action.targetAlias ?? "worker"}: ask for a corrected signal or retry`;
-      }
-      return `- ${action.targetAlias ?? "worker"}: check stale progress`;
-    });
+    return teamStatus.recommendedActions.map((action) => renderAggregateActionLine(action));
   }
 
   if (teamStatus.status === "completed") {
-    return ["- pass candidate; confirm with relay_team_status, then decide whether to clean up the team"];
+    return ["- pass candidate; confirm relay_team_status before cleanup"];
   }
 
   if (teamStatus.status === "cleaned_up") {
-    return ["- no further action; worker sessions were already cleaned up"];
+    return ["- no further action; team already cleaned up"];
   }
 
   if (teamStatus.status === "in_progress" || teamStatus.status === "ready" || teamStatus.status === "waiting") {
-    return ["- no manager action yet; wait for more worker signals or open relay_team_status"];
+    return ["- no manager action yet"];
   }
 
-  return ["- open relay_team_status for the aggregate state if you need more context"];
+  return ["- open relay_team_status for more context"];
 }
 
 function buildAggregateManagerSections(teamStatus: RelayTeamStatusView): { header: string; lines: string[]; actionLines: string[] } {

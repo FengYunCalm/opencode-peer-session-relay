@@ -216,7 +216,7 @@ describe("relay prompt preamble", () => {
     expect(prompt).toContain("Status:");
     expect(prompt).toContain("- reviewer: done [signal-review-complete · 100%] - Verdict pass");
     expect(prompt).toContain("Action:");
-    expect(prompt).toContain("- pass candidate; confirm with relay_team_status, then decide whether to clean up the team");
+    expect(prompt).toContain("- pass candidate; confirm relay_team_status before cleanup");
     expect(prompt).not.toContain("Details:");
     expect(prompt).not.toContain("[RELAYED AGENT INPUT]");
   });
@@ -326,7 +326,7 @@ describe("relay prompt preamble", () => {
     expect(prompt).not.toContain("planner ready for work");
     expect(prompt).toContain("Blocking:");
     expect(prompt).toContain("- reviewer: blocked [review-intake · 20%] - Need a concrete target");
-    expect(prompt).toContain("- reviewer: Need a concrete target");
+    expect(prompt).toContain("- reviewer: unblock");
   });
 
   it("normalizes stable blocked phases so repeated blocker updates can be suppressed", () => {
@@ -381,7 +381,7 @@ describe("relay prompt preamble", () => {
     });
 
     expect(prompt).toContain("- reviewer: blocked - Still waiting on live evidence");
-    expect(prompt).toContain("- reviewer: Still waiting on live evidence");
+    expect(prompt).toContain("- reviewer: unblock");
     expect(prompt).not.toContain("final-acceptance-waiting-on-live-evidence");
   });
 

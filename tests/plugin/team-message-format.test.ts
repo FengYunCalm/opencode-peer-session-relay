@@ -107,7 +107,7 @@ describe("manager relay message formatting", () => {
     expect(promptText).toContain("Status:");
     expect(promptText).toContain("- reviewer: done [signal-review-complete · 100%] - Verdict pass");
     expect(promptText).toContain("Action:");
-    expect(promptText).toContain("- no manager action yet; wait for more worker signals or open relay_team_status");
+    expect(promptText).toContain("- no manager action yet");
     expect(promptText).not.toContain("Details:");
     expect(promptText).not.toContain("[RELAYED AGENT INPUT]");
   });
@@ -160,7 +160,7 @@ describe("manager relay message formatting", () => {
     const firstPrompt = promptAsync.mock.calls[0]?.[0]?.body?.parts?.[0]?.text as string;
     expect(firstPrompt).toContain("Blocking:");
     expect(firstPrompt).toContain("- reviewer: blocked - Need live evidence");
-    expect(firstPrompt).toContain("- reviewer: Need live evidence");
+    expect(firstPrompt).toContain("- reviewer: unblock");
 
     state.runtime.teamStore.markWorkerSignal("session-planner", room.roomCode, {
       status: "in_progress",
