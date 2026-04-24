@@ -98,9 +98,14 @@ export class TeamStatusService {
       acc[worker.health] = (acc[worker.health] ?? 0) + 1;
       return acc;
     }, {});
+    const allWorkersCleaned = workers.length > 0 && workers.every((worker) => !!worker.cleanedUpAt);
 
     const allEvents = this.dependencies.auditStore.list(run.runId);
     const recentEvents = allEvents.slice(-12);
+    const attentionItems = allWorkersCleaned ? [] : this.buildAttentionItems(workers, allEvents);
+    const interventionOutcomes = allWorkersCleaned ? [] : this.buildInterventionOutcomes(workers, allEvents);
+    const policyDecisions = allWorkersCleaned ? [] : this.buildPolicyDecisions(workers, allEvents);
+    const recommendedActions = allWorkersCleaned ? [] : this.buildRecommendedActions(workers, recentEvents);
 
     return {
       runId: run.runId,
@@ -112,10 +117,10 @@ export class TeamStatusService {
       workers,
       summary: { counts, healthCounts },
       recentEvents,
-      attentionItems: this.buildAttentionItems(workers, allEvents),
-      interventionOutcomes: this.buildInterventionOutcomes(workers, allEvents),
-      policyDecisions: this.buildPolicyDecisions(workers, allEvents),
-      recommendedActions: this.buildRecommendedActions(workers, recentEvents),
+      attentionItems,
+      interventionOutcomes,
+      policyDecisions,
+      recommendedActions,
       nextStep: this.buildTeamNextStep(run, workers)
     };
   }
@@ -158,7 +163,8 @@ export class TeamStatusService {
     const sessionSnapshot = this.dependencies.sessionRegistry.get(worker.sessionID);
     const now = Date.now();
     const latestActivityAt = Math.max(worker.updatedAt, sessionSnapshot?.updatedAt ?? 0);
-    const stale = !["completed", "failed"].includes(worker.status)
+    const stale = !worker.cleanedUpAt
+      && !["completed", "failed"].includes(worker.status)
       && now - latestActivityAt > this.dependencies.teamWorkerStaleAfterMs;
 
     let health: RelayTeamWorkerHealth;
@@ -186,7 +192,7 @@ export class TeamStatusService {
   }
 
   private buildTeamNextStep(run: RelayTeamRun, workers: RelayTeamWorkerView[]): string {
-    if (workers.length > 0 && workers.every((worker) => !!worker.cleanedUpAt)) {
+    if (run.status === "cleaned_up" || (workers.length > 0 && workers.every((worker) => !!worker.cleanedUpAt))) {
       return "Worker sessions were cleaned up. Relay room, thread, and audit history remain available for review.";
     }
     if (run.status === "failed") {
@@ -248,6 +254,9 @@ export class TeamStatusService {
     };
 
     for (const worker of workers) {
+      if (worker.cleanedUpAt) {
+        continue;
+      }
       if (worker.health === "stale") {
         pushAction("nudge", worker.alias, undefined, `${worker.alias} looks stale and may need a wake-up check.`);
       }
@@ -320,6 +329,9 @@ export class TeamStatusService {
     };
 
     for (const worker of workers) {
+      if (worker.cleanedUpAt) {
+        continue;
+      }
       if (worker.health === "stale") {
         pushItem({
           kind: "stale_worker",
@@ -497,7 +509,10 @@ export class TeamStatusService {
 
       if (status === "pending" && targetAlias) {
         const worker = workers.find((entry) => entry.alias === targetAlias);
-        if (worker?.health === "stale" || worker?.status === "blocked") {
+        if (worker?.cleanedUpAt) {
+          status = "resolved";
+          reason = `${targetAlias} session was cleaned up`;
+        } else if (worker?.health === "stale" || worker?.status === "blocked") {
           status = "still_problematic";
           reason = worker.lastNote ?? `${targetAlias} remains ${worker.status === "blocked" ? "blocked" : "stale"}`;
         }

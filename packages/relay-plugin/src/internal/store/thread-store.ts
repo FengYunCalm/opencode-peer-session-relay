@@ -216,6 +216,13 @@ export class ThreadStore {
     return this.requireParticipant(threadId, sessionID);
   }
 
+  removeParticipant(threadId: string, sessionID: string): void {
+    this.database.transaction(() => {
+      this.database.prepare(`DELETE FROM relay_thread_participants WHERE thread_id = ? AND session_id = ?`).run(threadId, sessionID);
+      this.touchThread(threadId);
+    });
+  }
+
   touchThread(threadId: string): void {
     this.database.prepare(`UPDATE relay_threads SET updated_at = ? WHERE thread_id = ?`).run(Date.now(), threadId);
   }

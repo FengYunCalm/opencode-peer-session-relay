@@ -340,7 +340,7 @@ export async function bootstrapRelayWorkflowTeam(input: PluginInput, runtime: Re
   }
 
   const sessionApi = ensureSessionApi(input.client);
-  const room = runtime.createRoom(managerSessionID, "group");
+  const room = runtime.createRoom(managerSessionID, "group", { reuseExisting: false });
   const teamRun = runtime.teamStore.createRun({
     managerSessionID,
     roomCode: room.roomCode,

@@ -10,9 +10,17 @@ export function reviewerFinalAcceptanceSatisfied(workers: RelayTeamWorker[]): bo
 }
 
 export function aggregateTeamRunStatus(workers: RelayTeamWorker[], currentStatus?: RelayTeamRunStatus): RelayTeamRunStatus {
+  if (workers.length > 0 && workers.every((worker) => !!worker.cleanedUpAt)) {
+    return "cleaned_up";
+  }
+
   const reviewerGateSatisfied = reviewerFinalAcceptanceSatisfied(workers);
 
   if (currentStatus === "failed") {
+    return currentStatus;
+  }
+
+  if (currentStatus === "cleaned_up") {
     return currentStatus;
   }
 

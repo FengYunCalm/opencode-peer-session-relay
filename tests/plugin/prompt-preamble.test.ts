@@ -132,12 +132,80 @@ describe("relay prompt preamble", () => {
       }
     });
 
-    expect(prompt).toContain("[RELAY TEAM UPDATE]");
+    expect(prompt).toContain("[TEAM UPDATE]");
     expect(prompt).toContain("Worker sessions:");
     expect(prompt).toContain("[planner](/QzovcmVsYXktcHJvamVjdA/session/session-planner)");
     expect(prompt).toContain("[implementer](/QzovcmVsYXktcHJvamVjdA/session/session-implementer)");
     expect(prompt).toContain("[reviewer](/QzovcmVsYXktcHJvamVjdA/session/session-reviewer)");
-    expect(prompt).toContain("reviewer (member) DONE [phase=signal-review-complete · progress=100% · source=omo]: Verdict pass");
+    expect(prompt).toContain("Workers:");
+    expect(prompt).toContain("- reviewer: done [signal-review-complete · 100%] - Verdict pass");
+    expect(prompt).toContain("Action:");
+    expect(prompt).toContain("- pass candidate; confirm with relay_team_status, then decide whether to clean up the team");
     expect(prompt).not.toContain("[RELAYED AGENT INPUT]");
+  });
+
+  it("collapses multiple updates from the same worker into the latest state and surfaces blockers as actions", () => {
+    const prompt = buildThreadRelayPrompt({
+      roomCode: "030900",
+      recipientSessionID: "session-manager",
+      thread: {
+        threadId: "thread-team",
+        roomCode: "030900",
+        kind: "group",
+        title: "room-main",
+        createdBySessionID: "session-manager",
+        createdAt: 1,
+        updatedAt: 1
+      },
+      messages: [
+        {
+          threadId: "thread-team",
+          seq: 1,
+          messageId: "relaymsg-1",
+          senderSessionID: "session-planner",
+          messageType: "relay",
+          body: { text: "planner ready for work" },
+          createdAt: 1
+        },
+        {
+          threadId: "thread-team",
+          seq: 2,
+          messageId: "relaymsg-2",
+          senderSessionID: "session-planner",
+          messageType: "relay",
+          body: { text: '[TEAM_PROGRESS] {"source":"superpowers","phase":"planning","note":"Minimal plan drafted","progress":70}' },
+          createdAt: 2
+        },
+        {
+          threadId: "thread-team",
+          seq: 3,
+          messageId: "relaymsg-3",
+          senderSessionID: "session-reviewer",
+          messageType: "relay",
+          body: { text: '[TEAM_BLOCKER] {"source":"omo","phase":"review-intake","note":"Need a concrete target","progress":20}' },
+          createdAt: 3
+        }
+      ],
+      senderRoles: {
+        "session-planner": "member",
+        "session-reviewer": "member"
+      },
+      senderAliases: {
+        "session-planner": "planner",
+        "session-reviewer": "reviewer"
+      },
+      managerView: {
+        directory: "C:/relay-project",
+        workerLinks: [
+          { alias: "planner", role: "planner", sessionID: "session-planner" },
+          { alias: "reviewer", role: "reviewer", sessionID: "session-reviewer" }
+        ]
+      }
+    });
+
+    expect(prompt).toContain("- planner: progress [planning · 70%] - Minimal plan drafted");
+    expect(prompt).not.toContain("planner ready for work");
+    expect(prompt).toContain("- reviewer: blocked [review-intake · 20%] - Need a concrete target");
+    expect(prompt).toContain("- reviewer: manager input needed - Need a concrete target");
   });
 });

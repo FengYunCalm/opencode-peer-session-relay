@@ -270,8 +270,8 @@ export class RelayRuntime {
     return this.relayOrchestrator.getPeerSessionID(sessionID, roomCode);
   }
 
-  createRoom(sessionID: string, kind: RelayRoomKind = "private"): RelayRoom {
-    return this.relayOrchestrator.createRoom(sessionID, kind);
+  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean }): RelayRoom {
+    return this.relayOrchestrator.createRoom(sessionID, kind, options);
   }
 
   joinRoom(roomCode: string, sessionID: string, alias?: string): RelayRoom {
@@ -551,8 +551,8 @@ export class RelayRuntime {
     }
 
     const run = access.run;
-    if (!input.force && !["completed", "failed"].includes(run.status)) {
-      throw new Error("Team cleanup only runs after the workflow is completed or failed. Pass force=true to override.");
+    if (!input.force && !["completed", "failed", "cleaned_up"].includes(run.status)) {
+      throw new Error("Team cleanup only runs after the workflow is completed, failed, or already cleaned up. Pass force=true to override.");
     }
 
     const workers = this.teamStore
@@ -570,15 +570,7 @@ export class RelayRuntime {
     const failed: Array<{ sessionID: string; alias: string; role: string; error: string }> = [];
 
     for (const worker of workers) {
-      if (worker.cleanedUpAt) {
-        alreadyCleaned.push({
-          sessionID: worker.sessionID,
-          alias: worker.alias,
-          role: worker.role,
-          cleanedUpAt: worker.cleanedUpAt
-        });
-        continue;
-      }
+      const wasAlreadyCleaned = !!worker.cleanedUpAt;
 
       try {
         const sessionInfo = await this.input.client.session.get({
@@ -604,6 +596,16 @@ export class RelayRuntime {
           reason = deleted.response?.status === 404 ? "already_missing" : "deleted";
         }
 
+        const roomThreads = this.threadStore
+          .listThreadsForSession(worker.sessionID)
+          .filter((entry) => entry.roomCode === run.roomCode);
+        for (const entry of roomThreads) {
+          this.threadStore.removeParticipant(entry.threadId, worker.sessionID);
+        }
+        this.roomStore.setMemberMembershipStatus(run.roomCode, worker.sessionID, "removed");
+        this.sessionRegistry.remove(worker.sessionID);
+        this.humanGuard.resumeSession(worker.sessionID);
+
         const updated = this.teamStore.markWorkerCleanedUp(worker.sessionID, run.roomCode) ?? worker;
         this.auditStore.append(run.runId, "team.worker.cleaned_up", {
           managerSessionID,
@@ -612,13 +614,22 @@ export class RelayRuntime {
           role: worker.role,
           reason
         });
-        cleaned.push({
-          sessionID: worker.sessionID,
-          alias: worker.alias,
-          role: worker.role,
-          cleanedUpAt: updated.cleanedUpAt,
-          reason
-        });
+        if (wasAlreadyCleaned) {
+          alreadyCleaned.push({
+            sessionID: worker.sessionID,
+            alias: worker.alias,
+            role: worker.role,
+            cleanedUpAt: updated.cleanedUpAt
+          });
+        } else {
+          cleaned.push({
+            sessionID: worker.sessionID,
+            alias: worker.alias,
+            role: worker.role,
+            cleanedUpAt: updated.cleanedUpAt,
+            reason
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "unknown cleanup failure";
         this.auditStore.append(run.runId, "team.worker.cleanup_failed", {
@@ -637,6 +648,8 @@ export class RelayRuntime {
       }
     }
 
+    const refreshedRun = this.teamStore.getRun(run.runId) ?? run;
+
     this.auditStore.append(run.runId, "team.run.cleaned_up", {
       managerSessionID,
       roomCode: run.roomCode,
@@ -650,7 +663,7 @@ export class RelayRuntime {
     return {
       runId: run.runId,
       roomCode: run.roomCode,
-      runStatus: run.status,
+      runStatus: refreshedRun.status,
       targetAlias: input.targetAlias,
       force: Boolean(input.force),
       cleaned,

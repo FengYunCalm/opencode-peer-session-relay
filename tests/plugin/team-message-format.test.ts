@@ -89,11 +89,14 @@ describe("manager relay message formatting", () => {
 
     expect(promptAsync).toHaveBeenCalledTimes(1);
     const promptText = promptAsync.mock.calls[0]?.[0]?.body?.parts?.[0]?.text as string;
-    expect(promptText).toContain("[RELAY TEAM UPDATE]");
+    expect(promptText).toContain("[TEAM UPDATE]");
     expect(promptText).toContain("[planner](/QzovcmVsYXktcHJvamVjdA/session/session-planner)");
     expect(promptText).toContain("[implementer](/QzovcmVsYXktcHJvamVjdA/session/session-implementer)");
     expect(promptText).toContain("[reviewer](/QzovcmVsYXktcHJvamVjdA/session/session-reviewer)");
-    expect(promptText).toContain("reviewer (member) DONE [phase=signal-review-complete · progress=100% · source=omo]: Verdict pass");
+    expect(promptText).toContain("Workers:");
+    expect(promptText).toContain("- reviewer: done [signal-review-complete · 100%] - Verdict pass");
+    expect(promptText).toContain("Action:");
+    expect(promptText).toContain("- pass candidate; confirm with relay_team_status, then decide whether to clean up the team");
     expect(promptText).not.toContain("[RELAYED AGENT INPUT]");
   });
 });

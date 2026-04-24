@@ -1,11 +1,11 @@
-# Graph Report - .  (2026-04-23)
+# Graph Report - .  (2026-04-24)
 
 ## Corpus Check
-- 117 files · ~53,706 words
+- 117 files · ~54,751 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 495 nodes · 545 edges · 117 communities detected
+- 502 nodes · 560 edges · 117 communities detected
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS
 - Token cost: 0 input · 0 output
 
@@ -130,9 +130,9 @@
 
 ## God Nodes (most connected - your core abstractions)
 1. `RelayRuntime` - 45 edges
-2. `TeamStore` - 25 edges
-3. `RoomStore` - 24 edges
-4. `ThreadStore` - 23 edges
+2. `RoomStore` - 26 edges
+3. `TeamStore` - 25 edges
+4. `ThreadStore` - 24 edges
 5. `RelayRoomOrchestrator` - 19 edges
 6. `RelayMcpService` - 15 edges
 7. `TaskStore` - 14 edges
@@ -150,15 +150,15 @@ Cohesion: 0.06
 Nodes (8): getAcceptedDispatchSessionID(), isTaskDispatchAccepted(), jsonRpcError(), jsonRpcSuccess(), RelayRuntime, renderMessagePart(), sanitizeMessage(), sanitizePublicTask()
 
 ### Community 1 - "Community 1"
-Cohesion: 0.14
-Nodes (3): createRunId(), deserializeEvidence(), TeamStore
-
-### Community 2 - "Community 2"
 Cohesion: 0.12
 Nodes (4): createRoomCode(), normalizeAlias(), RoomStore, shouldRetryRoomMutation()
 
+### Community 2 - "Community 2"
+Cohesion: 0.14
+Nodes (3): createRunId(), deserializeEvidence(), TeamStore
+
 ### Community 3 - "Community 3"
-Cohesion: 0.13
+Cohesion: 0.12
 Nodes (3): createDirectKey(), shouldRetryThreadMutation(), ThreadStore
 
 ### Community 4 - "Community 4"
@@ -182,28 +182,28 @@ Cohesion: 0.22
 Nodes (3): createMessageId(), MessageStore, shouldRetryMessageInsert()
 
 ### Community 9 - "Community 9"
+Cohesion: 0.23
+Nodes (8): buildManagerActionLines(), buildManagerSummaries(), buildManagerThreadRelayPrompt(), buildThreadRelayPrompt(), createSessionHref(), encodeDirectorySlug(), normalizeManagerNote(), summarizeManagerMessage()
+
+### Community 10 - "Community 10"
 Cohesion: 0.29
 Nodes (1): TeamStatusService
 
-### Community 10 - "Community 10"
+### Community 11 - "Community 11"
 Cohesion: 0.24
 Nodes (5): applyRelaySessionDefaults(), createNamespacedRelayTools(), createRelayPluginTools(), getRelayToolSuffix(), isHookedRelayTool()
 
-### Community 11 - "Community 11"
+### Community 12 - "Community 12"
 Cohesion: 0.24
 Nodes (5): mapArtifactUpdateEvent(), mapTaskStatusEvent(), sanitizeArtifact(), sanitizeMessage(), TaskEventHub
 
-### Community 12 - "Community 12"
+### Community 13 - "Community 13"
 Cohesion: 0.36
 Nodes (9): acquireSqliteHandle(), configureSqliteDatabase(), createRawSqliteDatabase(), isRetryableSqliteError(), isSharedDatabaseLocation(), openBunDatabase(), openNodeDatabase(), openSqliteDatabase() (+1 more)
 
-### Community 13 - "Community 13"
+### Community 14 - "Community 14"
 Cohesion: 0.36
 Nodes (9): bootstrapRelayWorkflowTeam(), buildSessionTitle(), buildWorkerBootstrapPrompt(), classifyRelayWorkflowSignal(), ensureSessionApi(), extractCreatedSessionID(), normalizeSignalPayload(), summarizeTask() (+1 more)
-
-### Community 14 - "Community 14"
-Cohesion: 0.28
-Nodes (4): buildManagerThreadRelayPrompt(), buildThreadRelayPrompt(), createSessionHref(), encodeDirectorySlug()
 
 ### Community 15 - "Community 15"
 Cohesion: 0.39
@@ -781,10 +781,10 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.06 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.14 - nodes in this community are weakly interconnected._
-- **Should `Community 2` be split into smaller, more focused modules?**
   _Cohesion score 0.12 - nodes in this community are weakly interconnected._
+- **Should `Community 2` be split into smaller, more focused modules?**
+  _Cohesion score 0.14 - nodes in this community are weakly interconnected._
 - **Should `Community 3` be split into smaller, more focused modules?**
-  _Cohesion score 0.13 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.12 - nodes in this community are weakly interconnected._
 - **Should `Community 6` be split into smaller, more focused modules?**
   _Cohesion score 0.12 - nodes in this community are weakly interconnected._

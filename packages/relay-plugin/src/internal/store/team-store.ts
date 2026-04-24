@@ -5,7 +5,7 @@ import { validateWorkerSignalTransition } from "../policy/team-worker-transition
 import { initializeRelaySchema } from "./schema.js";
 import { openSqliteDatabase, type SqliteDatabase } from "./sqlite.js";
 
-export type RelayTeamRunStatus = "bootstrapping" | "waiting" | "ready" | "in_progress" | "blocked" | "completed" | "failed";
+export type RelayTeamRunStatus = "bootstrapping" | "waiting" | "ready" | "in_progress" | "blocked" | "completed" | "failed" | "cleaned_up";
 export type RelayTeamWorkerStatus = "created" | "bootstrapped" | "joined" | "ready" | "in_progress" | "blocked" | "completed" | "failed";
 
 export type RelayTeamRun = {

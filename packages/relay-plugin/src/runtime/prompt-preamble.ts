@@ -9,6 +9,21 @@ type ManagerRelayWorkerLink = {
   sessionID: string;
 };
 
+type ManagerRelayStatus = "ready" | "progress" | "blocked" | "done" | "note";
+
+type ManagerRelaySummary = {
+  sessionID: string;
+  alias: string;
+  role?: RelayRoomMemberRole;
+  status: ManagerRelayStatus;
+  note: string;
+  seq: number;
+  phase?: string;
+  progress?: number;
+  handoffTo?: string;
+  deliverables?: string[];
+};
+
 function encodeDirectorySlug(value: string): string {
   return Buffer.from(value, "utf8")
     .toString("base64")
@@ -21,30 +36,132 @@ function createSessionHref(directory: string, sessionID: string): string {
   return `/${encodeDirectorySlug(directory)}/session/${sessionID}`;
 }
 
-function renderManagerMessageLine(message: RelayMessage, alias?: string, role?: RelayRoomMemberRole): string {
+function normalizeManagerNote(message: RelayMessage): string {
+  const text = typeof message.body.text === "string" ? message.body.text.trim() : JSON.stringify(message.body, null, 2);
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function summarizeManagerMessage(message: RelayMessage, alias?: string, role?: RelayRoomMemberRole): ManagerRelaySummary {
   const text = typeof message.body.text === "string" ? message.body.text.trim() : JSON.stringify(message.body, null, 2);
   const signal = classifyRelayWorkflowSignal(text);
-  const senderLabel = alias ?? message.senderSessionID;
-  const roleLabel = role ? ` (${role})` : "";
 
   if (signal.matched && signal.accepted) {
-    const signalLabel = text.startsWith(relayWorkflowSignalPrefixes.ready)
-      ? "READY"
+    const status = text.startsWith(relayWorkflowSignalPrefixes.ready)
+      ? "ready"
       : text.startsWith(relayWorkflowSignalPrefixes.progress)
-        ? "PROGRESS"
+        ? "progress"
         : text.startsWith(relayWorkflowSignalPrefixes.blocker)
-          ? "BLOCKER"
-          : "DONE";
-    const details = [
-      signal.phase ? `phase=${signal.phase}` : undefined,
-      signal.progress !== undefined ? `progress=${signal.progress}%` : undefined,
-      signal.source ? `source=${signal.source}` : undefined
-    ].filter(Boolean).join(" · ");
-    return `- ${senderLabel}${roleLabel} ${signalLabel}${details ? ` [${details}]` : ""}: ${signal.note}`;
+          ? "blocked"
+          : "done";
+    const handoffTo = typeof signal.metadata?.handoffTo === "string" ? signal.metadata.handoffTo : undefined;
+    const deliverables = Array.isArray(signal.metadata?.deliverables)
+      ? signal.metadata.deliverables.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : undefined;
+
+    return {
+      sessionID: message.senderSessionID,
+      alias: alias ?? message.senderSessionID,
+      role,
+      status,
+      note: signal.note,
+      seq: message.seq,
+      phase: signal.phase,
+      progress: signal.progress,
+      handoffTo,
+      deliverables: deliverables && deliverables.length > 0 ? deliverables : undefined
+    };
   }
 
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return `- ${senderLabel}${roleLabel}: ${normalized}`;
+  return {
+    sessionID: message.senderSessionID,
+    alias: alias ?? message.senderSessionID,
+    role,
+    status: "note",
+    note: normalizeManagerNote(message),
+    seq: message.seq
+  };
+}
+
+function buildManagerSummaries(input: {
+  messages: RelayMessage[];
+  senderRoles: Record<string, RelayRoomMemberRole | undefined>;
+  senderAliases?: Record<string, string | undefined>;
+  workerLinks: ManagerRelayWorkerLink[];
+}): ManagerRelaySummary[] {
+  const bySessionID = new Map<string, ManagerRelaySummary>();
+  for (const message of input.messages) {
+    bySessionID.set(
+      message.senderSessionID,
+      summarizeManagerMessage(
+        message,
+        input.senderAliases?.[message.senderSessionID],
+        input.senderRoles[message.senderSessionID]
+      )
+    );
+  }
+
+  const summaries: ManagerRelaySummary[] = [];
+  for (const worker of input.workerLinks) {
+    const summary = bySessionID.get(worker.sessionID);
+    if (!summary) {
+      continue;
+    }
+    summaries.push({
+      ...summary,
+      alias: worker.alias,
+      role: summary.role,
+      sessionID: worker.sessionID
+    });
+    bySessionID.delete(worker.sessionID);
+  }
+
+  for (const summary of [...bySessionID.values()].sort((left, right) => left.seq - right.seq)) {
+    summaries.push(summary);
+  }
+
+  return summaries;
+}
+
+function renderManagerSummaryLine(summary: ManagerRelaySummary): string {
+  const details = [
+    summary.phase ? summary.phase : undefined,
+    summary.progress !== undefined ? `${summary.progress}%` : undefined
+  ].filter(Boolean).join(" · ");
+  const status = summary.status === "note" ? "note" : summary.status;
+  const prefix = `- ${summary.alias}: ${status}${details ? ` [${details}]` : ""}`;
+  return `${prefix} - ${summary.note}`;
+}
+
+function buildManagerActionLines(summaries: ManagerRelaySummary[]): string[] {
+  const actions: string[] = [];
+
+  for (const summary of summaries) {
+    if (summary.status === "blocked") {
+      actions.push(`- ${summary.alias}: manager input needed - ${summary.note}`);
+      continue;
+    }
+
+    if (summary.handoffTo && summary.handoffTo !== "manager") {
+      const deliverables = summary.deliverables?.join(", ");
+      actions.push(deliverables
+        ? `- ${summary.alias}: suggested handoff to ${summary.handoffTo} - ${deliverables}`
+        : `- ${summary.alias}: suggested handoff to ${summary.handoffTo}`);
+    }
+  }
+
+  if (actions.length > 0) {
+    return actions;
+  }
+
+  if (summaries.some((summary) => summary.status === "progress" || summary.status === "ready")) {
+    return ["- no manager action yet; wait for more worker signals or open relay_team_status"];
+  }
+
+  if (summaries.length > 0 && summaries.every((summary) => summary.status === "done" || summary.status === "note")) {
+    return ["- pass candidate; confirm with relay_team_status, then decide whether to clean up the team"];
+  }
+
+  return ["- open relay_team_status for the aggregate state if you need more context"];
 }
 
 function buildManagerThreadRelayPrompt(input: {
@@ -63,21 +180,24 @@ function buildManagerThreadRelayPrompt(input: {
       .join(" | ")
     : "none";
 
-  const lines = input.messages.map((message) => renderManagerMessageLine(
-    message,
-    input.senderAliases?.[message.senderSessionID],
-    input.senderRoles[message.senderSessionID]
-  ));
+  const summaries = buildManagerSummaries({
+    messages: input.messages,
+    senderRoles: input.senderRoles,
+    senderAliases: input.senderAliases,
+    workerLinks: input.workerLinks
+  });
+  const lines = summaries.map((summary) => renderManagerSummaryLine(summary));
+  const actionLines = buildManagerActionLines(summaries);
 
   return [
-    "[RELAY TEAM UPDATE]",
+    "[TEAM UPDATE]",
     `Room: ${input.roomCode}`,
-    `Thread: ${input.thread.threadId} (${input.thread.kind})`,
-    `Recipient session: ${input.recipientSessionID}`,
     `Worker sessions: ${workerLinkLine}`,
-    "Use relay_team_status for the aggregate state; use room/thread transcript tools only if you need raw details.",
-    "Updates:",
-    ...lines
+    "Workers:",
+    ...lines,
+    "Action:",
+    ...actionLines,
+    "Details: use relay_team_status for the aggregate view; use transcripts only for raw thread content."
   ].join("\n\n");
 }
 

@@ -73,10 +73,12 @@ export class RoomStore {
     return this.database.transaction(callback);
   }
 
-  createRoom(sessionID: string, kind: RelayRoomKind = "private"): RelayRoom {
-    const existing = this.getRoomBySession(sessionID, kind);
-    if (existing) {
-      return existing;
+  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean }): RelayRoom {
+    if (options?.reuseExisting !== false) {
+      const existing = this.getRoomBySession(sessionID, kind);
+      if (existing) {
+        return existing;
+      }
     }
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -157,6 +159,23 @@ export class RoomStore {
       .run(role, Date.now(), roomCode, sessionID);
 
     return this.getMember(roomCode, sessionID)!;
+  }
+
+  setMemberMembershipStatus(roomCode: string, sessionID: string, membershipStatus: RelayRoomMembershipStatus): RelayRoomMember | undefined {
+    const member = this.getMember(roomCode, sessionID);
+    if (!member) {
+      return undefined;
+    }
+
+    this.database.transaction(() => {
+      const now = Date.now();
+      this.database
+        .prepare(`UPDATE relay_room_members SET membership_status = ?, updated_at = ? WHERE room_code = ? AND session_id = ?`)
+        .run(membershipStatus, now, roomCode, sessionID);
+      this.refreshRoomOccupancy(roomCode, now);
+    });
+
+    return this.getMember(roomCode, sessionID);
   }
 
   getOwner(roomCode: string): RelayRoomMember {
@@ -277,6 +296,17 @@ export class RoomStore {
 
   close(): void {
     this.database.close();
+  }
+
+  private refreshRoomOccupancy(roomCode: string, now = Date.now()): void {
+    const activeMembers = this.listMembers(roomCode);
+    const firstJoinedPeer = activeMembers
+      .filter((member) => member.role !== "owner")
+      .sort((left, right) => left.joinedAt - right.joinedAt)[0];
+
+    this.database
+      .prepare(`UPDATE relay_rooms SET joined_session_id = ?, status = ?, updated_at = ? WHERE room_code = ?`)
+      .run(firstJoinedPeer?.sessionID ?? null, activeMembers.length > 1 ? "active" : "open", now, roomCode);
   }
 
   private ensureAliasAvailable(roomCode: string, alias: string | undefined, currentSessionID: string): void {
