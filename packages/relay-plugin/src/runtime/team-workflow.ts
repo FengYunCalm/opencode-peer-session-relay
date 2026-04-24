@@ -77,6 +77,8 @@ const defaultWorkerSpecs: TeamWorkerSpec[] = [
   }
 ];
 
+export const relayTeamManagerAlias = "manager";
+
 export const relayWorkflowSignalPrefixes = {
   ready: "[TEAM_READY]",
   progress: "[TEAM_PROGRESS]",
@@ -307,14 +309,17 @@ function buildWorkerBootstrapPrompt(spec: TeamWorkerSpec, task: string, roomCode
     "Task context:",
     `- Task: ${task}`,
     `- Manager session: ${managerSessionID}`,
+    `- Manager alias: ${relayTeamManagerAlias}`,
     `- Relay room code: ${roomCode}`,
     `- Required alias: ${spec.alias}`,
+    `- Known team aliases: ${relayTeamManagerAlias}, ${defaultWorkerSpecs.map((worker) => worker.alias).join(", ")}`,
     "",
     "Bootstrap checklist:",
     "1. Load the `relay-room` skill.",
     `2. Join the relay group room using alias \"${spec.alias}\" via relay_room_join or mcp__relay__room_join. Do not pass sessionID manually.`,
     `3. Send one short ready message to the room after joining using the prefix ${relayWorkflowSignalPrefixes.ready}.`,
-    `4. Mission: ${spec.mission}`,
+    `4. Use relay_room_send with targetAlias for private coordination. Use targetAlias "${relayTeamManagerAlias}" to talk directly to the manager, or one of the worker aliases for peer-to-peer messages. Use room-main broadcasts only when everyone needs to see the update.`,
+    `5. Mission: ${spec.mission}`,
     "",
     "Role guidance:",
     `- Tooling: ${roleWorkflowGuidance}`,
@@ -340,7 +345,7 @@ export async function bootstrapRelayWorkflowTeam(input: PluginInput, runtime: Re
   }
 
   const sessionApi = ensureSessionApi(input.client);
-  const room = runtime.createRoom(managerSessionID, "group", { reuseExisting: false });
+  const room = runtime.createRoom(managerSessionID, "group", { reuseExisting: false, ownerAlias: relayTeamManagerAlias });
   const teamRun = runtime.teamStore.createRun({
     managerSessionID,
     roomCode: room.roomCode,

@@ -37,6 +37,24 @@ function createSessionHref(directory: string, sessionID: string): string {
   return `/${encodeDirectorySlug(directory)}/session/${sessionID}`;
 }
 
+function summarizeDisplayNote(note: string, maxLength = 160): string {
+  const normalized = note.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return normalized;
+  }
+
+  const sentence = normalized.split(/(?<=[.!?。！？])\s+/)[0] ?? normalized;
+  if (sentence.length <= maxLength) {
+    return sentence;
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
 function normalizeManagerNote(message: RelayMessage): string {
   const text = typeof message.body.text === "string" ? message.body.text.trim() : JSON.stringify(message.body, null, 2);
   return text.replace(/\s+/g, " ").trim();
@@ -203,7 +221,7 @@ function renderAggregateWorkerLine(worker: RelayTeamWorkerView): string {
     const fallbackNote = stableBlocked
       ? "waiting on manager-provided live evidence or environment access"
       : "manager input required";
-    return `${prefix} - ${worker.lastNote ?? fallbackNote}`;
+    return `${prefix} - ${summarizeDisplayNote(worker.lastNote ?? fallbackNote, 220)}`;
   }
 
   if (mappedStatus === "progress") {
@@ -214,7 +232,7 @@ function renderAggregateWorkerLine(worker: RelayTeamWorkerView): string {
     return `${prefix}`;
   }
 
-  return `${prefix}${worker.lastNote ? ` - ${worker.lastNote}` : ""}`;
+  return `${prefix}${worker.lastNote ? ` - ${summarizeDisplayNote(worker.lastNote)}` : ""}`;
 }
 
 function renderAggregateUnblockActionLine(action: {
@@ -222,20 +240,20 @@ function renderAggregateUnblockActionLine(action: {
   reason: string;
 }): string {
   if (!action.targetAlias) {
-    return `- ${action.reason}`;
+    return `- ${summarizeDisplayNote(action.reason, 220)}`;
   }
 
   const blockedPrefix = `${action.targetAlias} is blocked: `;
   if (action.reason.startsWith(blockedPrefix)) {
-    return `- ${action.targetAlias}: ${action.reason.slice(blockedPrefix.length)}`;
+    return `- ${action.targetAlias}: ${summarizeDisplayNote(action.reason.slice(blockedPrefix.length), 220)}`;
   }
 
   const needsManagerPrefix = `${action.targetAlias} is blocked and `;
   if (action.reason.startsWith(needsManagerPrefix)) {
-    return `- ${action.targetAlias}: ${action.reason.slice(needsManagerPrefix.length)}`;
+    return `- ${action.targetAlias}: ${summarizeDisplayNote(action.reason.slice(needsManagerPrefix.length), 220)}`;
   }
 
-  return `- ${action.targetAlias}: ${action.reason}`;
+  return `- ${action.targetAlias}: ${summarizeDisplayNote(action.reason, 220)}`;
 }
 
 function buildAggregateManagerActionLines(teamStatus: RelayTeamStatusView): string[] {
@@ -284,7 +302,9 @@ function buildAggregateManagerSections(teamStatus: RelayTeamStatusView): { heade
   const statusWorkers = teamStatus.workers.filter((worker) => !worker.cleanedUpAt && ["ready", "in_progress", "completed", "failed"].includes(worker.status));
   return {
     header: "Status:",
-    lines: statusWorkers.map((worker) => renderAggregateWorkerLine(worker)),
+    lines: statusWorkers.length > 0
+      ? statusWorkers.map((worker) => renderAggregateWorkerLine(worker))
+      : ["- waiting for first worker signal"],
     actionLines: buildAggregateManagerActionLines(teamStatus)
   };
 }
@@ -303,7 +323,7 @@ function buildManagerThreadRelayPrompt(input: {
   const workerLinkLine = input.workerLinks.length > 0
     ? input.workerLinks
       .map((worker) => `[${worker.alias}](${createSessionHref(input.directory, worker.sessionID)})`)
-      .join(" | ")
+      .join(" · ")
     : "none";
 
   const sections = input.teamStatus
@@ -325,12 +345,9 @@ function buildManagerThreadRelayPrompt(input: {
   return [
     "[TEAM UPDATE]",
     `Room: ${input.roomCode}`,
-    `Worker sessions: ${workerLinkLine}`,
-    sections.header,
-    ...sections.lines,
-    "Action:",
-    ...sections.actionLines,
-    "Details: use relay_team_status for the aggregate view; use transcripts only for raw thread content."
+    `Open: ${workerLinkLine}`,
+    `${sections.header}\n${sections.lines.join("\n")}`,
+    `Action:\n${sections.actionLines.join("\n")}`
   ].join("\n\n");
 }
 

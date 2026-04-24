@@ -162,6 +162,70 @@ describe("relay room tools", () => {
     expect(direct).toContain("Target alias: alpha");
   });
 
+  it("lets a worker privately message the manager through the fixed manager alias in a team room", async () => {
+    const databasePath = createTestDatabaseLocation("room-tools-team-manager-alias");
+    dbLocations.push(databasePath);
+    const promptAsync = vi.fn().mockResolvedValue({ data: true });
+    const create = vi.fn()
+      .mockResolvedValueOnce({ data: { id: "session-planner", title: "team/planner: smoke" } })
+      .mockResolvedValueOnce({ data: { id: "session-implementer", title: "team/implementer: smoke" } })
+      .mockResolvedValueOnce({ data: { id: "session-reviewer", title: "team/reviewer: smoke" } });
+    const hooks = await RelayPlugin({
+      ...createPluginInput("project-room-tools-team-manager-alias", promptAsync),
+      client: {
+        session: {
+          prompt: vi.fn().mockResolvedValue({ data: true }),
+          promptAsync,
+          create
+        }
+      } as unknown as PluginInput["client"]
+    }, {
+      a2a: { port: 0 },
+      routing: { mode: "pair" },
+      runtime: { databasePath }
+    });
+
+    const started = JSON.parse(await hooks.tool?.relay_team_start.execute({ task: "smoke" }, {
+      sessionID: "session-manager",
+      messageID: "message-team-a",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    }) as string) as { roomCode: string };
+
+    await hooks.tool?.relay_room_join.execute({ roomCode: started.roomCode, alias: "planner" }, {
+      sessionID: "session-planner",
+      messageID: "message-team-b",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    promptAsync.mockClear();
+
+    const sent = await hooks.tool?.relay_room_send.execute({ roomCode: started.roomCode, message: "private note to manager", targetAlias: "manager" }, {
+      sessionID: "session-planner",
+      messageID: "message-team-c",
+      agent: "build",
+      directory: "C:/relay-project",
+      worktree: "C:/relay-project",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {}
+    });
+
+    expect(sent).toContain("Sent to peer session: session-manager");
+    expect(sent).toContain("Target alias: manager");
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ path: { id: "session-manager" } });
+  });
+
   it("sends a private-room message to the latest rejoined peer session", async () => {
     const databasePath = createTestDatabaseLocation("room-tools-private-rejoin");
     dbLocations.push(databasePath);

@@ -56,7 +56,7 @@ export class RelayRoomOrchestrator {
     private readonly deliveryHooks?: RelayDeliveryHooks
   ) {}
 
-  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean }): RelayRoom {
+  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean; ownerAlias?: string }): RelayRoom {
     const room = this.roomStore.createRoom(sessionID, kind, options);
     this.ensureDefaultThreadsForRoom(room.roomCode);
     return room;

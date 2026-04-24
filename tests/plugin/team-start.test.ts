@@ -131,6 +131,24 @@ describe("relay team start tool", () => {
       body: {
         parts: [
           expect.objectContaining({
+            text: expect.stringContaining("Manager alias: manager")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("Use targetAlias \"manager\" to talk directly to the manager")
+          })
+        ]
+      }
+    });
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
             text: expect.stringContaining("OpenSpec, Superpowers, and OMO")
           })
         ]
@@ -167,6 +185,7 @@ describe("relay team start tool", () => {
     const state = getRelayPluginStateForTest("project-team-start")!;
     const room = state.runtime.roomStore.getRoomBySession("session-manager")!;
     expect(room.kind).toBe("group");
+    expect(state.runtime.roomStore.getOwner(room.roomCode).alias).toBe("manager");
     expect(hooks.tool?.["mcp__relay__team_start"]).toBeDefined();
   });
 });

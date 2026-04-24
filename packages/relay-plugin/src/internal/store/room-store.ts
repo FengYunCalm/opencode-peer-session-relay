@@ -73,7 +73,7 @@ export class RoomStore {
     return this.database.transaction(callback);
   }
 
-  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean }): RelayRoom {
+  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean; ownerAlias?: string }): RelayRoom {
     if (options?.reuseExisting !== false) {
       const existing = this.getRoomBySession(sessionID, kind);
       if (existing) {
@@ -88,9 +88,9 @@ export class RoomStore {
       try {
         return this.database.transaction(() => {
           this.database
-            .prepare(`INSERT INTO relay_rooms (room_code, room_kind, created_by_session_id, joined_session_id, status, created_at, joined_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+            .prepare(`INSERT INTO relay_rooms (room_code, room_kind, created_by_session_id, joined_session_id, status, created_at, joined_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`) 
             .run(roomCode, kind, sessionID, null, "open", now, null, now);
-          this.upsertMember(roomCode, sessionID, sessionID, "owner", now);
+          this.upsertMember(roomCode, sessionID, options?.ownerAlias ?? sessionID, "owner", now);
           return this.getRoom(roomCode)!;
         });
       } catch (error) {

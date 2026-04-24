@@ -271,7 +271,7 @@ export class RelayRuntime {
     return this.relayOrchestrator.getPeerSessionID(sessionID, roomCode);
   }
 
-  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean }): RelayRoom {
+  createRoom(sessionID: string, kind: RelayRoomKind = "private", options?: { reuseExisting?: boolean; ownerAlias?: string }): RelayRoom {
     return this.relayOrchestrator.createRoom(sessionID, kind, options);
   }
 

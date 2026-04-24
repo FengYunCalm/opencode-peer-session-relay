@@ -1,11 +1,11 @@
 # Graph Report - .  (2026-04-24)
 
 ## Corpus Check
-- 117 files · ~56,248 words
+- 117 files · ~56,735 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 510 nodes · 573 edges · 117 communities detected
+- 511 nodes · 576 edges · 117 communities detected
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS
 - Token cost: 0 input · 0 output
 
@@ -167,7 +167,7 @@ Nodes (1): RelayRoomOrchestrator
 
 ### Community 5 - "Community 5"
 Cohesion: 0.15
-Nodes (12): buildAggregateManagerActionLines(), buildAggregateManagerSections(), buildManagerSummaries(), buildManagerThreadRelayPrompt(), buildThreadRelayPrompt(), createSessionHref(), encodeDirectorySlug(), isStableManagerPhase() (+4 more)
+Nodes (14): buildAggregateManagerActionLines(), buildAggregateManagerSections(), buildManagerSummaries(), buildManagerThreadRelayPrompt(), buildThreadRelayPrompt(), createSessionHref(), encodeDirectorySlug(), isStableManagerPhase() (+6 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.2

@@ -209,7 +209,7 @@ describe("relay prompt preamble", () => {
     });
 
     expect(prompt).toContain("[TEAM UPDATE]");
-    expect(prompt).toContain("Worker sessions:");
+    expect(prompt).toContain("Open:");
     expect(prompt).toContain("[planner](/QzovcmVsYXktcHJvamVjdA/session/session-planner)");
     expect(prompt).toContain("[implementer](/QzovcmVsYXktcHJvamVjdA/session/session-implementer)");
     expect(prompt).toContain("[reviewer](/QzovcmVsYXktcHJvamVjdA/session/session-reviewer)");
@@ -217,6 +217,7 @@ describe("relay prompt preamble", () => {
     expect(prompt).toContain("- reviewer: done [signal-review-complete · 100%] - Verdict pass");
     expect(prompt).toContain("Action:");
     expect(prompt).toContain("- pass candidate; confirm with relay_team_status, then decide whether to clean up the team");
+    expect(prompt).not.toContain("Details:");
     expect(prompt).not.toContain("[RELAYED AGENT INPUT]");
   });
 
@@ -382,5 +383,40 @@ describe("relay prompt preamble", () => {
     expect(prompt).toContain("- reviewer: blocked - Still waiting on live evidence");
     expect(prompt).toContain("- reviewer: Still waiting on live evidence");
     expect(prompt).not.toContain("final-acceptance-waiting-on-live-evidence");
+  });
+
+  it("shows a compact waiting placeholder when no worker status is available yet", () => {
+    const prompt = buildThreadRelayPrompt({
+      roomCode: "030900",
+      recipientSessionID: "session-manager",
+      thread: {
+        threadId: "thread-team",
+        roomCode: "030900",
+        kind: "group",
+        title: "room-main",
+        createdBySessionID: "session-manager",
+        createdAt: 1,
+        updatedAt: 1
+      },
+      messages: [],
+      senderRoles: {},
+      managerView: {
+        directory: "C:/relay-project",
+        workerLinks: [
+          { alias: "planner", role: "planner", sessionID: "session-planner" },
+          { alias: "implementer", role: "implementer", sessionID: "session-implementer" },
+          { alias: "reviewer", role: "reviewer", sessionID: "session-reviewer" }
+        ],
+        teamStatus: createManagerTeamStatus({
+          status: "waiting",
+          workers: [],
+          summary: { counts: {}, healthCounts: {} },
+          nextStep: "waiting"
+        }) as never
+      }
+    });
+
+    expect(prompt).toContain("Status:");
+    expect(prompt).toContain("- waiting for first worker signal");
   });
 });
